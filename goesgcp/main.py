@@ -224,7 +224,7 @@ def main():
     print('Cropping and reprojecting files...')
     # Crop and reproject all files in serial mode
     for file in recent_files:
-        crop_reproject(f'tmp/{file.split("/")[-1]}', output)
+        crop_reproject(f'tmp/{file.split("/")[-1]}', output_path)
         loading_bar.update(1)
     loading_bar.close()
 
