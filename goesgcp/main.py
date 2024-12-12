@@ -185,8 +185,8 @@ def main():
     pattern = "OR_"+product+domain+"-M6C"+channel+"_G" + satellite[-2:]
     min_files = args.recent
 
-    output = 'output/'
-    pathlib.Path(output).mkdir(parents=True, exist_ok=True)
+    # Create output directory
+    pathlib.Path(output_path).mkdir(parents=True, exist_ok=True)
 
     # Create connection
     storage_client = storage.Client.create_anonymous_client()
