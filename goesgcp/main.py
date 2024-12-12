@@ -151,7 +151,7 @@ def main():
     parser.add_argument('--lon_min', type=float, default=-116, help='Minimum longitude of the bounding box')
     parser.add_argument('--lon_max', type=float, default=-25, help='Maximum longitude of the bounding box')
     parser.add_argument('--resolution', type=float, default=0.045, help='Resolution of the output file')
-    parser.add_argument('--output_path', type=str, default='output/', help='Path for saving output files')
+    parser.add_argument('--output', type=str, default='output/', help='Path for saving output files')
 
     # Other settings
     parser.add_argument('--parallel', type=bool, default=True, help='Use parallel processing')
@@ -166,7 +166,7 @@ def main():
         sys.exit(1)
 
     # Set global variables
-    output_path = args.output_path
+    output_path = args.output
     satellite = args.satellite
     product = args.product
     domain = args.domain
