@@ -4,10 +4,10 @@ import xarray as xr
 import argparse
 import sys
 import tqdm
-from concurrent.futures import ThreadPoolExecutor
+from multiprocessing import Pool
 from google.cloud import storage
 from datetime import datetime, timedelta, timezone
-from pyproj import CRS
+from pyproj import CRS, Transformer
 
 
 
@@ -64,56 +64,106 @@ def get_recent_files(connection, bucket_name, base_prefix, pattern, min_files):
     # Return only the names of the most recent files, according to the minimum requested
     return [file[0] for file in files[:min_files]]
 
-def download_file(connection, bucket_name, blob_name, local_path):
-    """Downloads a file from a GCP bucket."""
-    bucket = connection.bucket(bucket_name)
-    blob = bucket.blob(blob_name)
-    blob.download_to_filename(local_path)
 
 def crop_reproject(file, output):
     """
     Crops and reprojects a GOES-16 file to EPSG:4326.
     """
+    # Open the file
+    ds = xr.open_dataset(file, engine='netcdf4')
 
-
-    ds = xr.open_dataset(file)
     # Select only var_name and goes_imager_projection
     ds = ds[[var_name, "goes_imager_projection"]]
+
     # Get projection
     sat_height = ds["goes_imager_projection"].attrs["perspective_point_height"]
     ds = ds.assign_coords({
                 "x": ds["x"].values * sat_height,
                 "y": ds["y"].values * sat_height,
             })
-    # Set CRS
+    # Set CRS from goes_imager_projection
     crs = CRS.from_cf(ds["goes_imager_projection"].attrs)
     ds = ds.rio.write_crs(crs)
 
-    # Reproject to EPSG:4326 using parallel processing
-    ds = ds.rio.reproject(dst_crs="EPSG:4326",
-                          resolution=(resolution, resolution),
-                          num_threads=-1)
+    # Try to reduce the size of the dataset
+    try:
+        # Create a transformer
+        transformer = Transformer.from_crs(CRS.from_epsg(4326), crs)
+        # Calculate the margin
+        margin_ratio = 0.40  # 40% margin
+
+        # Get the bounding box
+        min_x, min_y = transformer.transform(lat_min, lon_min)
+        max_x, max_y = transformer.transform(lat_max, lon_max)
+
+        # Calculate the range
+        x_range = abs(max_x - min_x)
+        y_range = abs(max_y - min_y)
+
+        margin_x = x_range * margin_ratio
+        margin_y = y_range * margin_ratio
+
+        # Expand the bounding box
+        min_x -= margin_x
+        max_x += margin_x
+        min_y -= margin_y
+        max_y += margin_y
+
+        # Select the region
+        if ds["y"].values[0] > ds["y"].values[-1]:  # Eixo y decrescente
+            ds_ = ds.sel(x=slice(min_x, max_x), y=slice(max_y, min_y))
+        else:  # Eixo y crescente
+            ds_ = ds.sel(x=slice(min_x, max_x), y=slice(min_y, max_y))
+        # Sort by y
+        if ds_["y"].values[0] > ds_["y"].values[-1]:
+            ds_ = ds_.sortby("y")
+        # Assign to ds
+        ds = ds_
+    except:
+        pass
+
+    # Reproject to EPSG:4326
+    ds = ds.rio.reproject("EPSG:4326", resolution=(resolution, resolution))
 
     # Rename lat/lon coordinates
     ds = ds.rename({"x": "lon", "y": "lat"})
 
-    # # Crop using lat/lon coordinates, in parallel
-    ds = ds.rio.clip_box(minx=lon_min, miny=lat_min, maxx=lon_max, maxy=lat_max)
+    # Add resolution to attributes
+    ds[var_name].attrs['resolution'] = "x={:.2f} y={:.2f} degree".format(resolution, resolution) 
 
-    # Remove any previous file
-    if pathlib.Path(f'{output}{file.split("/")[-1]}.nc').exists():
-        pathlib.Path(f'{output}{file.split("/")[-1]}.nc').unlink()
+    # Crop using lat/lon coordinates, in parallel
+    ds = ds.rio.clip_box(minx=lon_min, miny=lat_min, maxx=lon_max, maxy=lat_max)
 
     # Add comments
     ds[var_name].attrs['comments'] = 'Cropped and reprojected to EPSG:4326 by helvecioblneto@gmail.com'
 
-    # # Save as netcdf
-    ds.to_netcdf(f'{output}{file.split("/")[-1]}')
+    # Save as netcdf overwriting the original file
+    ds.to_netcdf(f'{output}{file.split("/")[-1]}', mode='w', format='NETCDF4_CLASSIC')
 
-    # Remove original file
-    pathlib.Path(file).unlink()
+    # Close the dataset
+    ds.close()
 
     return
+
+
+
+def download_file(args):
+    """Downloads a file from a GCP bucket."""
+
+    bucket_name, blob_name, local_path = args
+
+    # Create a client
+    bucket = storage_client.bucket(bucket_name)
+    blob = bucket.blob(blob_name)
+
+    # Download the file
+    blob.download_to_filename(local_path, timeout=120)
+
+    # Crop and reproject the file
+    crop_reproject(local_path, output_path)
+
+    # Remove the file
+    pathlib.Path(local_path).unlink()
 
 
 
@@ -121,7 +171,7 @@ def main():
 
     global output_path, var_name, \
           lat_min, lat_max, lon_min, lon_max, \
-          max_attempts, parallel, recent, resolution
+          max_attempts, parallel, recent, resolution, storage_client
 
     epilog = """
     Example usage:
@@ -146,11 +196,11 @@ def main():
     parser.add_argument('--recent', type=int, default=3, help='Number of recent files to download')
 
     # Geographic bounding box
-    parser.add_argument('--lat_min', type=float, default=-56, help='Minimum latitude of the bounding box')
-    parser.add_argument('--lat_max', type=float, default=35, help='Maximum latitude of the bounding box')
-    parser.add_argument('--lon_min', type=float, default=-116, help='Minimum longitude of the bounding box')
-    parser.add_argument('--lon_max', type=float, default=-25, help='Maximum longitude of the bounding box')
-    parser.add_argument('--resolution', type=float, default=0.045, help='Resolution of the output file')
+    parser.add_argument('--lat_min', type=float, default=-81.3282, help='Minimum latitude of the bounding box')
+    parser.add_argument('--lat_max', type=float, default=81.3282, help='Maximum latitude of the bounding box')
+    parser.add_argument('--lon_min', type=float, default=-156.2995, help='Minimum longitude of the bounding box')
+    parser.add_argument('--lon_max', type=float, default=6.2995, help='Maximum longitude of the bounding box')
+    parser.add_argument('--resolution', type=float, default=0.03208, help='Resolution of the output file')
     parser.add_argument('--output', type=str, default='output/', help='Path for saving output files')
 
     # Other settings
@@ -205,28 +255,22 @@ def main():
     if not recent_files:
         print(f"No files found with the pattern {pattern}. Exiting...")
         sys.exit(1)
-    print('Downloading files...')
-    # Loading bar
+
+    # Create a temporary directory
+    pathlib.Path('tmp/').mkdir(parents=True, exist_ok=True)
+
+    print(f"Downloading and processing {len(recent_files)} files...")
+
+    # Process files in parallel
     loading_bar = tqdm.tqdm(total=len(recent_files), ncols=100, position=0, leave=True,
                         bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} + \
                         [Elapsed:{elapsed} Remaining:<{remaining}]')
     
-    # Create a temporary directory
-    pathlib.Path('tmp/').mkdir(parents=True, exist_ok=True)
-
     # Download all files to a temporary directory
-    with ThreadPoolExecutor(max_workers=args.processes) as executor:
-        for file in recent_files:
-            download_file(storage_client, bucket_name, file, f'tmp/{file.split("/")[-1]}')
+    with Pool(processes=args.processes) as pool:
+        for _ in pool.imap_unordered(download_file, [(bucket_name, 
+                                                      file, f'tmp/{file.split("/")[-1]}') for file in recent_files]):
             loading_bar.update(1)
-    loading_bar.close()
-
-    print('Cropping and reprojecting files...')
-    # Crop and reproject all files in serial mode
-    for file in recent_files:
-        crop_reproject(f'tmp/{file.split("/")[-1]}', output_path)
-        loading_bar.update(1)
-    loading_bar.close()
 
     # Remove temporary directory
     shutil.rmtree('tmp/')
