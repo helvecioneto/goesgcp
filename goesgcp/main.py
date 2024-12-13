@@ -123,7 +123,7 @@ def crop_reproject(file, output):
         pass
 
     # Reproject to EPSG:4326
-    ds = ds.rio.reproject("EPSG:4326", resolution=(resolution, resolution))
+    ds = ds.rio.reproject("EPSG:4326", resolution=resolution)
 
     # Rename lat/lon coordinates
     ds = ds.rename({"x": "lon", "y": "lat"})
@@ -135,8 +135,11 @@ def crop_reproject(file, output):
     ds = ds.rio.clip_box(minx=lon_min, miny=lat_min, maxx=lon_max, maxy=lat_max)
 
     # Add comments
-    ds[var_name].attrs['comments'] = 'Cropped and reprojected to EPSG:4326 by helvecioblneto@gmail.com'
+    ds[var_name].attrs['comments'] = 'Cropped and reprojected to EPSG:4326 by goesgcp'
 
+    # Add global metadata comments
+    ds.attrs['comments'] = "Data processed by goesgcp, author: Helvecio B. L. Neto (helvecioblneto@gmail.com)"
+        
     # Save as netcdf overwriting the original file
     ds.to_netcdf(f'{output}{file.split("/")[-1]}', mode='w', format='NETCDF4_CLASSIC')
 
@@ -176,9 +179,9 @@ def main():
     epilog = """
     Example usage:
     
-    - To download recent files from the GOES-16 satellite for the ABI-L2-CMIPF product, extracting the CMI variable from channel 13, in the last 30 minutes:
+    - To download recent 10 files from the GOES-16 satellite for the ABI-L2-CMIPF product:
 
-    goesgcp --satellite goes16 --product ABI-L2-CMIP --domain F --var_name CMI --channel 13 --recent 10 --output_path "output/"
+    goesgcp --satellite goes16 --product ABI-L2-CMIP --recent 10 --output_path "output/"
     """
 
 
