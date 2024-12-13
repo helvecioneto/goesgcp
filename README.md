@@ -39,7 +39,7 @@ goesgcp [OPTIONS]
 To download most 3 recent data for the GOES-16 satellite, ABI-L2-CMIPF product, variable CMI, and channel 13, run the following command:
 
 ```bash
-goesgcp --satellite goes16 --product ABI-L2-CMIPF --var_name CMI --channel 13 --recent 3 --output_path "output/"
+goesgcp --satellite goes16 --product ABI-L2-CMIPF --var_name CMI --channel 13 --recent 3 --output "output/"
 ```
 
 ### Credits
