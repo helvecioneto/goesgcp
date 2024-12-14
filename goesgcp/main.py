@@ -4,6 +4,7 @@ import xarray as xr
 import argparse
 import sys
 import tqdm
+from distutils.util import strtobool
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import Pool
 from google.cloud import storage
@@ -204,16 +205,16 @@ def main():
     parser.add_argument('--output', type=str, default='output/', help='Path for saving output files')
 
     # Other settings
-    parser.add_argument('--parallel', type=bool, default=True, help='Use parallel processing')
+    parser.add_argument('--parallel', type=lambda x: bool(strtobool(x)), default=True, help='Use parallel processing')
     parser.add_argument('--processes', type=int, default=4, help='Number of processes for parallel execution')
     parser.add_argument('--max_attempts', type=int, default=3, help='Number of attempts to download a file')
 
     # Parse arguments
     args = parser.parse_args()
 
-    if len(sys.argv) == 1:
-        parser.print_help(sys.stderr)
-        sys.exit(1)
+    # if len(sys.argv) == 1:
+    #     parser.print_help(sys.stderr)
+    #     sys.exit(1)
 
     # Set global variables
     output_path = args.output
@@ -265,26 +266,36 @@ def main():
                         bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} + \
                         [Elapsed:{elapsed} Remaining:<{remaining}]')
     
-    # Download all files to a temporary directory
-    with ThreadPoolExecutor(max_workers=args.processes) as executor:
+    if parallel:
+        # Download all files to a temporary directory
+        with ThreadPoolExecutor(max_workers=args.processes) as executor:
+            for file in recent_files:
+                local_path = f"tmp/{file.split('/')[-1]}"
+                executor.submit(download_file, (bucket_name, file, local_path))
+                loading_bar.update(1)
+        loading_bar.close()
+
+        # Process files
+        print(f"\nProcessing {len(recent_files)} files...")
+        load_bar2 = tqdm.tqdm(total=len(recent_files), ncols=100, position=0, leave=True,
+                            bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} + \
+                            [Elapsed:{elapsed} Remaining:<{remaining}]')
+
+        
+        # Process files in parallel
+        with Pool(processes=args.processes) as pool:
+            for _ in pool.imap_unordered(crop_reproject, [(f"tmp/{file.split('/')[-1]}", output_path) for file in recent_files]):
+                load_bar2.update(1)
+        load_bar2.close()
+    else:
         for file in recent_files:
             local_path = f"tmp/{file.split('/')[-1]}"
-            executor.submit(download_file, (bucket_name, file, local_path))
+            download_file((bucket_name, file, local_path))
+            crop_reproject((local_path, output_path))
             loading_bar.update(1)
-    loading_bar.close()
+        loading_bar.close()
 
-    # Process files
-    print(f"\nProcessing {len(recent_files)} files...")
-    load_bar2 = tqdm.tqdm(total=len(recent_files), ncols=100, position=0, leave=True,
-                        bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} + \
-                        [Elapsed:{elapsed} Remaining:<{remaining}]')
 
-    
-    # Process files in parallel
-    with Pool(processes=args.processes) as pool:
-        for _ in pool.imap_unordered(crop_reproject, [(f"tmp/{file.split('/')[-1]}", output_path) for file in recent_files]):
-            load_bar2.update(1)
-    load_bar2.close()
 
     # Remove temporary directory
     shutil.rmtree('tmp/')
