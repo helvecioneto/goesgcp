@@ -1,16 +1,16 @@
 import pathlib
 import shutil
+import time
 import xarray as xr
 import argparse
 import sys
 import tqdm
 from distutils.util import strtobool
-from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import Pool
 from google.cloud import storage
 from datetime import datetime, timedelta, timezone
 from pyproj import CRS, Transformer
-
+from google.api_core.exceptions import GoogleAPIError
 
 
 def list_blobs(connection, bucket_name, prefix):
@@ -75,7 +75,7 @@ def crop_reproject(args):
     file, output = args
 
     # Open the file
-    ds = xr.open_dataset(file, engine='netcdf4')
+    ds = xr.open_dataset(file, engine="netcdf4")
 
     # Select only var_name and goes_imager_projection
     ds = ds[[var_name, "goes_imager_projection"]]
@@ -154,21 +154,43 @@ def crop_reproject(args):
     return
 
 
-
-def download_file(args):
-    """Downloads a file from a GCP bucket."""
+def process_file(args):
+    """ Downloads and processes a file in parallel. """
 
     bucket_name, blob_name, local_path = args
 
-    # Create a client
-    bucket = storage_client.bucket(bucket_name)
-    blob = bucket.blob(blob_name)
+    # Download options
+    retries = 5
+    attempt = 0
 
-    # Download the file
-    blob.download_to_filename(local_path, timeout=120)
+    while attempt < retries:
+        try:
+            # Connect to the bucket
+            bucket = storage_client.bucket(bucket_name)
+            blob = bucket.blob(blob_name)
+
+            # Download the file
+            blob.download_to_filename(local_path, timeout=120)
+            break  # Exit the loop if the download is successful
+        except (GoogleAPIError, Exception) as e:  # Catch any exception
+            attempt += 1
+            if attempt < retries:
+                time.sleep(2 ** attempt)  # Backoff exponencial
+            else:
+                # Log the error to a file
+                with open('fail.log', 'a') as log_file:
+                    log_file.write(f"Failed to download {blob_name} after {retries} attempts. Error: {e}\n")
+
+    # Crop the file
+    crop_reproject((local_path, output_path))
+
+    # Remove the local file
+    pathlib.Path(local_path).unlink()
 
 
 def main():
+    ''' Main function to download and process GOES-16 files. '''
+
 
     global output_path, var_name, \
           lat_min, lat_max, lon_min, lon_max, \
@@ -212,9 +234,9 @@ def main():
     # Parse arguments
     args = parser.parse_args()
 
-    # if len(sys.argv) == 1:
-    #     parser.print_help(sys.stderr)
-    #     sys.exit(1)
+    if len(sys.argv) == 1:
+        parser.print_help(sys.stderr)
+        sys.exit(1)
 
     # Set global variables
     output_path = args.output
@@ -261,41 +283,26 @@ def main():
     pathlib.Path('tmp/').mkdir(parents=True, exist_ok=True)
 
     # Download files
-    print(f"Downloading {len(recent_files)} files...")
+    print(f"GOESGCP: Downloading and processing {len(recent_files)} files...")
     loading_bar = tqdm.tqdm(total=len(recent_files), ncols=100, position=0, leave=True,
                         bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} + \
                         [Elapsed:{elapsed} Remaining:<{remaining}]')
     
-    if parallel:
-        # Download all files to a temporary directory
-        with ThreadPoolExecutor(max_workers=args.processes) as executor:
-            for file in recent_files:
-                local_path = f"tmp/{file.split('/')[-1]}"
-                executor.submit(download_file, (bucket_name, file, local_path))
+    if parallel: # Run in parallel
+        # Create a list of tasks
+        tasks = [(bucket_name, file, f"tmp/{file.split('/')[-1]}") for file in recent_files]
+
+        # Download files in parallel
+        with Pool(processes=args.processes) as pool:
+            for _ in pool.imap_unordered(process_file, tasks):
                 loading_bar.update(1)
         loading_bar.close()
-
-        # Process files
-        print(f"\nProcessing {len(recent_files)} files...")
-        load_bar2 = tqdm.tqdm(total=len(recent_files), ncols=100, position=0, leave=True,
-                            bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} + \
-                            [Elapsed:{elapsed} Remaining:<{remaining}]')
-
-        
-        # Process files in parallel
-        with Pool(processes=args.processes) as pool:
-            for _ in pool.imap_unordered(crop_reproject, [(f"tmp/{file.split('/')[-1]}", output_path) for file in recent_files]):
-                load_bar2.update(1)
-        load_bar2.close()
-    else:
+    else: # Run in serial
         for file in recent_files:
             local_path = f"tmp/{file.split('/')[-1]}"
-            download_file((bucket_name, file, local_path))
-            crop_reproject((local_path, output_path))
+            process_file((bucket_name, file, local_path))
             loading_bar.update(1)
         loading_bar.close()
-
-
 
     # Remove temporary directory
     shutil.rmtree('tmp/')
