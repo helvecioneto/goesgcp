@@ -21,6 +21,7 @@ def list_blobs(connection, bucket_name, prefix):
     bucket = connection.bucket(bucket_name)
 
     blobs = bucket.list_blobs(prefix=prefix)
+
     return blobs
 
 def get_directory_prefix(year, julian_day, hour):
@@ -44,6 +45,8 @@ def get_recent_files(connection, bucket_name, base_prefix, pattern, min_files):
     while len(files) < min_files:
         year = current_time.year
         julian_day = current_time.timetuple().tm_yday  # Get the Julian day
+        # Add 3 digits to the Julian day
+        julian_day = str(julian_day).zfill(3)
         hour = current_time.hour
 
         # Generate the directory prefix for the current date and time
