@@ -5,6 +5,7 @@ import xarray as xr
 import argparse
 import sys
 import tqdm
+import pandas as pd
 from distutils.util import strtobool
 from multiprocessing import Pool
 from google.cloud import storage
@@ -27,6 +28,83 @@ def list_blobs(connection, bucket_name, prefix):
 def get_directory_prefix(year, julian_day, hour):
     """Generates the directory path based on year, Julian day, and hour."""
     return f"{year}/{julian_day}/{str(hour).zfill(2)}/"
+
+
+def get_files_period(connection, bucket_name, base_prefix, pattern, 
+                     start, end, bt_hour=[0, 23], bt_min=[0, 60], freq='10 min'):
+    """
+    Fetches files from a GCP bucket within a specified time period and returns them as a DataFrame.
+
+    :param connection: The GCP storage client connection.
+    :param bucket_name: Name of the GCP bucket.
+    :param base_prefix: Base directory prefix for the files.
+    :param pattern: Search pattern for file names.
+    :param start: Start datetime (inclusive).
+    :param end: End datetime (exclusive).
+    :return: DataFrame containing the file names and their metadata.
+    """
+
+    print(f"GOESGCP: Fetching files between {start} and {end}...")
+
+    # Ensure datetime objects
+    start = pd.to_datetime(start).tz_localize('UTC')
+    end = pd.to_datetime(end).tz_localize('UTC')
+
+    # Initialize list to store file metadata
+    files_metadata = []
+
+    # Generate the list of dates from start to end
+    current_time = start
+    while current_time < end:
+        year = current_time.year
+        julian_day = str(current_time.timetuple().tm_yday).zfill(3)  # Julian day
+        hour = current_time.hour
+
+        # Generate the directory prefix
+        prefix = f"{base_prefix}/{get_directory_prefix(year, julian_day, hour)}"
+
+        # List blobs in the bucket for the current prefix
+        blobs = list_blobs(connection, bucket_name, prefix)
+
+        # Filter blobs by pattern
+        for blob in blobs:
+            if pattern in blob.name:
+                files_metadata.append({
+                    'file_name': blob.name,
+                    'last_modified': blob.updated
+                })
+
+        # Move to the next hour
+        current_time += timedelta(hours=1)
+
+    # Create a DataFrame from the list of files
+    df = pd.DataFrame(files_metadata)
+
+    if df.empty:
+        print("No files found matching the pattern.")
+        return pd.DataFrame()
+    
+    # Ensure 'last_modified' is in the correct datetime format without timezone
+    df['last_modified'] = pd.to_datetime(df['last_modified']).dt.tz_localize(None)
+    start = pd.to_datetime(start).tz_localize(None)
+    end = pd.to_datetime(end).tz_localize(None)
+    
+    # Filter the DataFrame based on the date range
+    df = df[(df['last_modified'] >= start) & (df['last_modified'] < end)]
+
+    # Filter the DataFrame based on the hour range
+    df['hour'] = df['last_modified'].dt.hour
+    df = df[(df['hour'] >= bt_hour[0]) & (df['hour'] <= bt_hour[1])]
+
+    # Filter the DataFrame based on the minute range
+    df['minute'] = df['last_modified'].dt.minute
+    df = df[(df['minute'] >= bt_min[0]) & (df['minute'] <= bt_min[1])]
+
+    # Filter the DataFrame based on the frequency
+    df['freq'] = df['last_modified'].dt.floor(freq)
+    df = df.groupby('freq').first().reset_index()
+
+    return df['file_name'].tolist()
 
 def get_recent_files(connection, bucket_name, base_prefix, pattern, min_files):
     """
@@ -148,12 +226,31 @@ def crop_reproject(args):
     # Add global metadata comments
     ds.attrs['comments'] = "Data processed by goesgcp, author: Helvecio B. L. Neto (helvecioblneto@gmail.com)"
         
-    # Save as netcdf overwriting the original file
-    ds.to_netcdf(f'{output}{file.split("/")[-1]}', mode='w', format='NETCDF4_CLASSIC')
+    if save_format == 'by_date':
+        file_datetime = datetime.strptime(ds.time_coverage_start, 
+                                          "%Y-%m-%dT%H:%M:%S.%fZ")
+        year = file_datetime.strftime("%Y")
+        month = file_datetime.strftime("%m")
+        day = file_datetime.strftime("%d")
+        output_directory = f"{output}{year}/{month}/{day}/"
+    elif save_format == 'julian':
+        file_datetime = datetime.strptime(ds.time_coverage_start, 
+                                          "%Y-%m-%dT%H:%M:%S.%fZ")
+        year = file_datetime.strftime("%Y")
+        julian_day = file_datetime.timetuple().tm_yday
+        output_directory = f"{output}{year}/{julian_day}/"
+    else:
+        output_directory = output
 
-    # Close the dataset
+    # Create the output directory
+    pathlib.Path(output_directory).mkdir(parents=True, exist_ok=True)
+
+    # Save the file
+    output_file = f"{output_directory}{file.split('/')[-1]}"
+    ds.to_netcdf(output_file, mode='w', format='NETCDF4_CLASSIC')
+
+    # Fechar o dataset
     ds.close()
-
     return
 
 
@@ -197,14 +294,20 @@ def main():
 
     global output_path, var_name, \
           lat_min, lat_max, lon_min, lon_max, \
-          max_attempts, parallel, recent, resolution, storage_client
+          max_attempts, parallel, recent, resolution, storage_client, \
+            satellite, product, domain, op_mode, channel, save_format
 
     epilog = """
     Example usage:
     
-    - To download recent 10 files from the GOES-16 satellite for the ABI-L2-CMIPF product:
+    - To download recent 3 files from the GOES-16 satellite for the ABI-L2-CMIPF product:
 
-    goesgcp --satellite goes16 --product ABI-L2-CMIP --recent 10 --output_path "output/"
+    goesgcp --satellite goes16 --product ABI-L2-CMIP --recent 3"
+
+    - To download files from the GOES-16 satellite for the ABI-L2-CMIPF product between 2022-12-15 and 2022-12-20:
+
+    goesgcp --start '2022-12-15 00:00:00' --end '2022-12-20 10:00:00' --bt_hour 5 6 --save_format by_date --resolution 0.045 --lat_min -35 --lat_max 5 --lon_min -80 --lon_max -30
+
     """
 
 
@@ -219,7 +322,17 @@ def main():
     parser.add_argument('--var_name', type=str, default='CMI', help='Variable name to extract (e.g., CMI)')
     parser.add_argument('--channel', type=int, default=13, help='Channel to use (e.g., 13)')
     parser.add_argument('--domain', type=str, default='F', help='Domain to use (e.g., F or C)')
-    parser.add_argument('--recent', type=int, default=3, help='Number of recent files to download')
+    parser.add_argument('--op_mode', type=str, default='M6C', help='Operational mode to use (e.g., M6C)')
+
+    # Recent files settings
+    parser.add_argument('--recent', type=int, help='Number of recent files to download (e.g., 3)')
+
+    # Date and time settings
+    parser.add_argument('--start', type=str, help='Start date in YYYY-MM-DD format')
+    parser.add_argument('--end', type=str, help='End date in YYYY-MM-DD format')
+    parser.add_argument('--freq', type=str, default='10 min', help='Frequency for the time range (e.g., "10 min")')
+    parser.add_argument('--bt_hour', nargs=2, type=int, default=[0, 23], help='Filter data between these hours (e.g., 0 23)')
+    parser.add_argument('--bt_min', nargs=2, type=int, default=[0, 60], help='Filter data between these minutes (e.g., 0 60)')
 
     # Geographic bounding box
     parser.add_argument('--lat_min', type=float, default=-81.3282, help='Minimum latitude of the bounding box')
@@ -233,6 +346,9 @@ def main():
     parser.add_argument('--parallel', type=lambda x: bool(strtobool(x)), default=True, help='Use parallel processing')
     parser.add_argument('--processes', type=int, default=4, help='Number of processes for parallel execution')
     parser.add_argument('--max_attempts', type=int, default=3, help='Number of attempts to download a file')
+    parser.add_argument('--save_format', type=str, default='flat', choices=['flat', 'by_date','julian'],
+                    help="Save the files in a flat structure or by date")
+
 
     # Parse arguments
     args = parser.parse_args()
@@ -246,6 +362,7 @@ def main():
     satellite = args.satellite
     product = args.product
     domain = args.domain
+    op_mode = args.op_mode
     channel = str(args.channel).zfill(2)
     var_name = args.var_name
     lat_min = args.lat_min
@@ -255,11 +372,22 @@ def main():
     resolution = args.resolution
     max_attempts = args.max_attempts
     parallel = args.parallel
+    recent = args.recent
+    start = args.start
+    end = args.end
+    freq = args.freq
+    bt_hour = args.bt_hour
+    bt_min = args.bt_min
+    save_format = args.save_format
+
+
+    # Check mandatory arguments
+    if not args.recent and not (args.start and args.end):
+        print("You must provide either the --recent or --start and --end arguments. Exiting...")
+        sys.exit(1)
 
     # Set bucket name and pattern
     bucket_name = "gcp-public-data-" + satellite
-    pattern = "OR_"+product+domain+"-M6C"+channel+"_G" + satellite[-2:]
-    min_files = args.recent
 
     # Create output directory
     pathlib.Path(output_path).mkdir(parents=True, exist_ok=True)
@@ -274,11 +402,20 @@ def main():
         print(f"Bucket {bucket_name} not found. Exiting...")
         sys.exit(1)
 
-    # Search for recent files
-    recent_files = get_recent_files(storage_client, bucket_name, product + domain, pattern, min_files)
+    # Set pattern for the files
+    pattern = "OR_"+product+domain+"-"+op_mode+channel+"_G" + satellite[-2:]
+
+    # Check operational mode if is recent or specific date
+    if start and end:
+        files_list = get_files_period(storage_client, bucket_name,
+                                       product + domain, pattern, start, end,
+                                        bt_hour, bt_min, freq)
+    else:
+        # Get recent files
+        files_list = get_recent_files(storage_client, bucket_name, product + domain, pattern, recent)
 
     # Check if any files were found
-    if not recent_files:
+    if not files_list:
         print(f"No files found with the pattern {pattern}. Exiting...")
         sys.exit(1)
 
@@ -286,14 +423,14 @@ def main():
     pathlib.Path('tmp/').mkdir(parents=True, exist_ok=True)
 
     # Download files
-    print(f"GOESGCP: Downloading and processing {len(recent_files)} files...")
-    loading_bar = tqdm.tqdm(total=len(recent_files), ncols=100, position=0, leave=True,
+    print(f"GOESGCP: Downloading and processing {len(files_list)} files...")
+    loading_bar = tqdm.tqdm(total=len(files_list), ncols=100, position=0, leave=True,
                         bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} + \
                         [Elapsed:{elapsed} Remaining:<{remaining}]')
     
     if parallel: # Run in parallel
         # Create a list of tasks
-        tasks = [(bucket_name, file, f"tmp/{file.split('/')[-1]}") for file in recent_files]
+        tasks = [(bucket_name, file, f"tmp/{file.split('/')[-1]}") for file in files_list]
 
         # Download files in parallel
         with Pool(processes=args.processes) as pool:
@@ -301,7 +438,7 @@ def main():
                 loading_bar.update(1)
         loading_bar.close()
     else: # Run in serial
-        for file in recent_files:
+        for file in files_list:
             local_path = f"tmp/{file.split('/')[-1]}"
             process_file((bucket_name, file, local_path))
             loading_bar.update(1)
