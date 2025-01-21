@@ -40,6 +40,8 @@ goesgcp [OPTIONS]
 | `--bt_minute`         | Minute of the hour to download data (default: [0, 15, 30, 45]).           |
 | `--save_format`       | Format for saving output files (default: `by_date`).                      |
 
+All GOES products are avaiable in: [https://github.com/awslabs/open-data-docs/tree/main/docs/noaa/noaa-goes16](https://github.com/awslabs/open-data-docs/tree/main/docs/noaa/noaa-goes16)
+
 ### Examples
 
 To download most 3 recent data for the GOES-16 satellite, ABI-L2-CMIPF product, variable CMI, and channel 13, run the following command:
