@@ -1,15 +1,29 @@
 # goesgcp
+<!-- badges: start -->
+[![pypi](https://badge.fury.io/py/goesgcp.svg)](https://pypi.python.org/pypi/goesgcp)
+[![Downloads](https://img.shields.io/pypi/dm/goesgcp.svg)](https://pypi.python.org/pypi/goesgcp)
+[![Contributors](https://img.shields.io/github/contributors/helvecioneto/goesgcp.svg)](https://github.com/helvecioneto/goesgcp/graphs/contributors)
+[![License](https://img.shields.io/pypi/l/goesgcp.svg)](https://github.com/helvecioneto/goesgcp/blob/main/LICENSE)
+<!-- badges: end -->
 
-goesgcp is a utility script for downloading and reprojecting GOES-R satellite data. The script uses the `google.cloud` library to download data from the Google Cloud Platform (GCP) and the `pyproj` library to reproject the data to EPSG:4326 and crop it to a specified bounding box.
 
+`goesgcp` is a Python utility designed for downloading and reprojecting GOES-R satellite data. This script leverages the `google.cloud` library for accessing data from the Google Cloud Platform (GCP) and `pyproj` for reprojecting data to EPSG:4326, as well as cropping it to a user-defined bounding box.
+
+## Features
+
+- **Download GOES-R satellite data**: Supports GOES-16 and GOES-17.
+- **Reprojection and cropping**: Reprojects data to EPSG:4326 and crops to a specified bounding box.
+- **Flexible command-line interface**: Customize download options, variables, channels, time range, and output format.
+- **Efficient processing**: Handles large datasets with optimized performance.
 
 ## Installation
 
-You can install the necessary dependencies using `pip`:
+Install the necessary dependencies via `pip`:
 
 ```bash
 pip install goesgcp
 ```
+
 
 ## Usage
 
@@ -40,21 +54,31 @@ goesgcp [OPTIONS]
 | `--bt_minute`         | Minute of the hour to download data (default: [0, 15, 30, 45]).           |
 | `--save_format`       | Format for saving output files (default: `by_date`).                      |
 
-All GOES products are avaiable in: [https://github.com/awslabs/open-data-docs/tree/main/docs/noaa/noaa-goes16](https://github.com/awslabs/open-data-docs/tree/main/docs/noaa/noaa-goes16)
+#### Available GOES Products
+A comprehensive list of available GOES products can be found at the following link: [https://github.com/awslabs/open-data-docs/tree/main/docs/noaa/noaa-goes16](https://github.com/awslabs/open-data-docs/tree/main/docs/noaa/noaa-goes16)
 
 ### Examples
 
-To download most 3 recent data for the GOES-16 satellite, ABI-L2-CMIPF product, variable CMI, and channel 13, run the following command:
+#### Download Recent Data
+In the example below, the command downloads the 3 most recent files from the GOES-16 satellite for the product ABI-L2-CMIPF. It focuses on the variable CMI (Cloud and Moisture Imagery) from channel 13, which is commonly used for infrared observations. The downloaded files are saved to the specified output directory output/.
 
 ```bash
 goesgcp --satellite goes16 --product ABI-L2-CMIPF --var_name CMI --channel 13 --recent 3 --output "output/"
 ```
 
-To download data for a specific date range, use the `--start` and `--end` options:
+#### Download Data for a Specific Time Range
+This command retrieves GOES-16 satellite data for the product ABI-L2-CMIPF within the date range 2022-12-15 00:00:00 to 2022-12-20 10:00:00, focusing on hours 5:00 and 6:00 AM. The data is cropped to the geographic bounds of -35° to 5° latitude and -80° to -30° longitude, reprojected with a resolution of 0.045 degrees, and saved in a by_date format for easy organization.
 
 ```bash
-goesgcp --start '2022-12-15 00:00:00' --end '2022-12-20 10:00:00' --bt_hour 5 6 --save_format by_date --resolution 0.045 --lat_min -35 --lat_max 5 --lon_min -80 --lon_max -30
+goesgcp -satellite goes16 --product ABI-L2-CMIPF --start '2022-12-15 00:00:00' --end '2022-12-20 10:00:00' --bt_hour 5 6 --save_format by_date --resolution 0.045 --lat_min -35 --lat_max 5 --lon_min -80 --lon_max -30
 ```
 
+### Contributing
+Contributions are welcome! If you encounter issues or have suggestions for improvements, please submit them via GitHub issues or pull requests.
+
 ### Credits
-And this is a otimization by Helvecio Neto - 2025
+This project was developed and optimized by Helvecio Neto (2025).
+It builds upon NOAA GOES-R data and leverages resources provided by the Google Cloud Platform.
+
+### License
+This project is licensed under the MIT License. 
