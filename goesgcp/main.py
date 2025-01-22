@@ -93,7 +93,7 @@ def get_files_period(connection, bucket_name, base_prefix, pattern,
     end = pd.to_datetime(end).tz_localize(None)
     
     # Filter the DataFrame based on the date range
-    df = df[(df['last_modified'] >= start) & (df['last_modified'] < end)]
+    df = df[(df['last_modified'] >= start) & (df['last_modified'] <= end)]
 
     # Filter the DataFrame based on the hour range
     df['hour'] = df['last_modified'].dt.hour
@@ -313,7 +313,7 @@ def main():
 
     - To download files from the GOES-16 satellite for the ABI-L2-CMIPF product between 2022-12-15 and 2022-12-20:
 
-    goesgcp --satellite goes-16 --product ABI-L2-CMIPF --start '2022-12-15 00:00:00' --end '2022-12-20 10:00:00' --resolution 0.045 --lat_min -35 --lat_max 5 --lon_min -80 --lon_max -30
+    goesgcp --satellite goes-16 --product ABI-L2-CMIPF --start '2022-12-15 09:00:00' --end '2022-12-15 10:00:00' --resolution 0.045 --lat_min -35 --lat_max 5 --lon_min -80 --lon_max -30
 
     """
 
