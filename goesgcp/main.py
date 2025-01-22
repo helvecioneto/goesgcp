@@ -295,14 +295,14 @@ def main():
     global output_path, var_name, \
           lat_min, lat_max, lon_min, lon_max, \
           max_attempts, parallel, recent, resolution, storage_client, \
-            satellite, product, domain, op_mode, channel, save_format
+            satellite, product, op_mode, channel, save_format
 
     epilog = """
     Example usage:
     
     - To download recent 3 files from the GOES-16 satellite for the ABI-L2-CMIPF product:
 
-    goesgcp --satellite goes16 --product ABI-L2-CMIP --recent 3"
+    goesgcp --satellite goes16 --product ABI-L2-CMIP --recent 3
 
     - To download files from the GOES-16 satellite for the ABI-L2-CMIPF product between 2022-12-15 and 2022-12-20:
 
@@ -310,6 +310,23 @@ def main():
 
     """
 
+    product_names = [
+    "ABI-L1b-RadF", "ABI-L1b-RadC", "ABI-L1b-RadM", "ABI-L2-ACHAC", "ABI-L2-ACHAF", "ABI-L2-ACHAM",
+    "ABI-L2-ACHTF", "ABI-L2-ACHTM", "ABI-L2-ACMC", "ABI-L2-ACMF", "ABI-L2-ACMM", "ABI-L2-ACTPC",
+    "ABI-L2-ACTPF", "ABI-L2-ACTPM", "ABI-L2-ADPC", "ABI-L2-ADPF", "ABI-L2-ADPM", "ABI-L2-AICEF",
+    "ABI-L2-AITAF", "ABI-L2-AODC", "ABI-L2-AODF", "ABI-L2-BRFC", "ABI-L2-BRFF", "ABI-L2-BRFM",
+    "ABI-L2-CMIPC", "ABI-L2-CMIPF", "ABI-L2-CMIPM", "ABI-L2-CODC", "ABI-L2-CODF", "ABI-L2-CPSC",
+    "ABI-L2-CPSF", "ABI-L2-CPSM", "ABI-L2-CTPC", "ABI-L2-CTPF", "ABI-L2-DMWC", "ABI-L2-DMWF",
+    "ABI-L2-DMWM", "ABI-L2-DMWVC", "ABI-L2-DMWVF", "ABI-L2-DMWVF", "ABI-L2-DSIC", "ABI-L2-DSIF",
+    "ABI-L2-DSIM", "ABI-L2-DSRC", "ABI-L2-DSRF", "ABI-L2-DSRM", "ABI-L2-FDCC", "ABI-L2-FDCF",
+    "ABI-L2-FDCM", "ABI-L2-LSAC", "ABI-L2-LSAF", "ABI-L2-LSAM", "ABI-L2-LSTC", "ABI-L2-LSTF",
+    "ABI-L2-LSTM", "ABI-L2-LVMPC", "ABI-L2-LVMPF", "ABI-L2-LVMPM", "ABI-L2-LVTPC", "ABI-L2-LVTPF",
+    "ABI-L2-LVTPM", "ABI-L2-MCMIPC", "ABI-L2-MCMIPF", "ABI-L2-MCMIPM", "ABI-L2-RRQPEF",
+    "ABI-L2-RSRC", "ABI-L2-RSRF", "ABI-L2-SSTF", "ABI-L2-TPWC", "ABI-L2-TPWF", "ABI-L2-TPWM",
+    "ABI-L2-VAAF", "EXIS-L1b-SFEU", "EXIS-L1b-SFXR", "GLM-L2-LCFA", "MAG-L1b-GEOF", "SEIS-L1b-EHIS",
+    "SEIS-L1b-MPSH", "SEIS-L1b-MPSL", "SEIS-L1b-SGPS", "SUVI-L1b-Fe093", "SUVI-L1b-Fe131",
+    "SUVI-L1b-Fe171", "SUVI-L1b-Fe195", "SUVI-L1b-Fe284", "SUVI-L1b-He303"
+    ]
 
     # Set arguments
     parser = argparse.ArgumentParser(description='Converts GOES-16 L2 data to netCDF',
@@ -317,11 +334,10 @@ def main():
                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     
     # Satellite and product settings
-    parser.add_argument('--satellite', type=str, default='goes-16', help='Name of the satellite (e.g., goes16)')
-    parser.add_argument('--product', type=str, default='ABI-L2-CMIP', help='Name of the satellite product')
+    parser.add_argument('--satellite', type=str, default='goes-16', choices=['goes-16', 'goes-17'], help='Name of the satellite (e.g., goes16)')
+    parser.add_argument('--product', type=str, default='ABI-L2-CMIP', help='Name of the satellite product', choices=product_names)
     parser.add_argument('--var_name', type=str, default='CMI', help='Variable name to extract (e.g., CMI)')
     parser.add_argument('--channel', type=int, default=13, help='Channel to use (e.g., 13)')
-    parser.add_argument('--domain', type=str, default='F', help='Domain to use (e.g., F or C)')
     parser.add_argument('--op_mode', type=str, default='M6C', help='Operational mode to use (e.g., M6C)')
 
     # Recent files settings
@@ -361,7 +377,6 @@ def main():
     output_path = args.output
     satellite = args.satellite
     product = args.product
-    domain = args.domain
     op_mode = args.op_mode
     channel = str(args.channel).zfill(2)
     var_name = args.var_name
@@ -403,16 +418,16 @@ def main():
         sys.exit(1)
 
     # Set pattern for the files
-    pattern = "OR_"+product+domain+"-"+op_mode+channel+"_G" + satellite[-2:]
+    pattern = "OR_"+product+"-"+op_mode+channel+"_G" + satellite[-2:]
 
     # Check operational mode if is recent or specific date
     if start and end:
         files_list = get_files_period(storage_client, bucket_name,
-                                       product + domain, pattern, start, end,
+                                       product, pattern, start, end,
                                         bt_hour, bt_min, freq)
     else:
         # Get recent files
-        files_list = get_recent_files(storage_client, bucket_name, product + domain, pattern, recent)
+        files_list = get_recent_files(storage_client, bucket_name, product, pattern, recent)
 
     # Check if any files were found
     if not files_list:
