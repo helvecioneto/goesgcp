@@ -82,13 +82,14 @@ def get_files_period(connection, bucket_name, base_prefix, pattern,
     # Create a DataFrame from the list of files
     df = pd.DataFrame(files_metadata)
 
+    if df.empty:
+        print("No files found matching the pattern and time range.")
+        print(prefix)
+        sys.exit(1)
+    
     # Transform file_name to datetime
     df['last_modified'] = pd.to_datetime(df['file_name'].str.extract(r'(\d{4}\d{3}\d{2}\d{2})').squeeze(), format='%Y%j%H%M')
 
-
-    if df.empty:
-        print("No files found matching the pattern.")
-        return pd.DataFrame()
     
     # Ensure 'last_modified' is in the correct datetime format without timezone
     df['last_modified'] = pd.to_datetime(df['last_modified']).dt.tz_localize('UTC')
@@ -139,7 +140,7 @@ def get_recent_files(connection, bucket_name, base_prefix, pattern, min_files):
 
         # Filter blobs based on the pattern
         for blob in blobs:
-            if pattern in blob.name:  # You can use "re" here for more complex patterns
+            if pattern in blob.name:
                 files.append((blob.name, blob.updated))
 
         # Go back one hour
@@ -221,23 +222,27 @@ def crop_reproject(args):
     except:
         pass
 
-    # Reproject to EPSG:4326
-    ds = ds.rio.reproject("EPSG:4326", resolution=resolution)
+    try:
+        # Reproject to EPSG:4326
+        ds = ds.rio.reproject("EPSG:4326", resolution=resolution)
 
-    # Rename lat/lon coordinates
-    ds = ds.rename({"x": "lon", "y": "lat"})
+        # Rename lat/lon coordinates
+        ds = ds.rename({"x": "lon", "y": "lat"})
 
-    # Add resolution to attributes
-    for var in var_names:
-        ds[var].attrs['resolution'] = "x={:.2f} y={:.2f} degree".format(resolution, resolution)
-        ds[var].attrs['comments'] = 'Cropped and reprojected to EPSG:4326 by goesgcp'
+        # Add resolution to attributes
+        for var in var_names:
+            ds[var].attrs['resolution'] = "x={:.2f} y={:.2f} degree".format(resolution, resolution)
+            ds[var].attrs['comments'] = 'Cropped and reprojected to EPSG:4326 by goesgcp'
 
-    # Crop using lat/lon coordinates, in parallel
-    ds = ds.rio.clip_box(minx=lon_min, miny=lat_min, maxx=lon_max, maxy=lat_max)
+        # Crop using lat/lon coordinates, in parallel
+        ds = ds.rio.clip_box(minx=lon_min, miny=lat_min, maxx=lon_max, maxy=lat_max)
 
-    # Add global metadata comments
-    ds.attrs['comments'] = "Data processed by goesgcp, author: Helvecio B. L. Neto (helvecioblneto@gmail.com)"
-        
+        # Add global metadata comments
+        ds.attrs['comments'] = "Data processed by goesgcp, author: Helvecio B. L. Neto (helvecioblneto@gmail.com)"
+    except Exception as e:
+        print(f"Error processing file {file}: {e}")
+        pass    
+    
     if save_format == 'by_date':
         file_datetime = datetime.strptime(ds.time_coverage_start, 
                                           "%Y-%m-%dT%H:%M:%S.%fZ")
@@ -253,13 +258,14 @@ def crop_reproject(args):
         output_directory = f"{output}{year}/{julian_day}/"
     else:
         output_directory = output
+        
 
     # Create the output directory
     pathlib.Path(output_directory).mkdir(parents=True, exist_ok=True)
 
     # Save the file
     output_file = f"{output_directory}{file.split('/')[-1]}"
-    ds.to_netcdf(output_file, mode='w', format='NETCDF4_CLASSIC')
+    ds.to_netcdf(output_file, mode='w')
 
     ds.close()
 
@@ -345,7 +351,7 @@ def main():
     parser.add_argument('--product', type=str, default='ABI-L2-CMIPF', help='Name of the satellite product', choices=product_names)
     parser.add_argument('--var_name', type=str, default=None, help='Variable name to extract (e.g., CMI)')
     parser.add_argument('--channel', type=int, default=13, help='Channel to use (e.g., 13)')
-    parser.add_argument('--op_mode', type=str, default='M6C', help='Operational mode to use (e.g., M6C)')
+    parser.add_argument('--op_mode', type=str, default='M6', help='Operational mode to use (e.g., M6C)')
 
     # Recent files settings
     parser.add_argument('--recent', type=int, help='Number of recent files to download (e.g., 3)')
@@ -385,7 +391,7 @@ def main():
     satellite = args.satellite
     product = args.product
     op_mode = args.op_mode
-    channel = str(args.channel).zfill(2)
+    channel = args.channel
     var_name = args.var_name
     lat_min = args.lat_min
     lat_max = args.lat_max
@@ -420,6 +426,13 @@ def main():
     except Exception as e:
         print(f"Bucket {bucket_name} not found. Exiting...")
         sys.exit(1)
+
+    # Check if the channel exists
+    if not channel:
+        channel = ''
+    else:
+        channel = str(channel).zfill(2)
+        channel = f"C{channel}"
 
     # Set pattern for the files
     pattern = "OR_"+product+"-"+op_mode+channel+"_G" + satellite[-2:]
