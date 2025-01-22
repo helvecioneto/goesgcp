@@ -13,6 +13,9 @@ from datetime import datetime, timedelta, timezone
 from pyproj import CRS, Transformer
 from google.api_core.exceptions import GoogleAPIError
 
+import warnings
+warnings.filterwarnings('ignore')
+
 
 def list_blobs(connection, bucket_name, prefix):
     """
@@ -153,13 +156,22 @@ def crop_reproject(args):
     Crops and reprojects a GOES-16 file to EPSG:4326.
     """
 
-    file, output = args
+    file, output, var_name, lat_min, lat_max, lon_min, lon_max, resolution, save_format = args
 
     # Open the file
     ds = xr.open_dataset(file, engine="netcdf4")
 
+    if var_name is None:
+        # Get all variables are 2D
+        var_names = [var for var in ds.data_vars if len(ds[var].dims) == 2]
+
+        # Remove DQF variables
+        var_names = [var for var in var_names if 'DQF' not in var]
+    else:
+        var_names = [var_name]
+
     # Select only var_name and goes_imager_projection
-    ds = ds[[var_name, "goes_imager_projection"]]
+    ds = ds[var_names + ["goes_imager_projection"]]
 
     # Get projection
     sat_height = ds["goes_imager_projection"].attrs["perspective_point_height"]
@@ -215,13 +227,12 @@ def crop_reproject(args):
     ds = ds.rename({"x": "lon", "y": "lat"})
 
     # Add resolution to attributes
-    ds[var_name].attrs['resolution'] = "x={:.2f} y={:.2f} degree".format(resolution, resolution) 
+    for var in var_names:
+        ds[var].attrs['resolution'] = "x={:.2f} y={:.2f} degree".format(resolution, resolution)
+        ds[var].attrs['comments'] = 'Cropped and reprojected to EPSG:4326 by goesgcp'
 
     # Crop using lat/lon coordinates, in parallel
     ds = ds.rio.clip_box(minx=lon_min, miny=lat_min, maxx=lon_max, maxy=lat_max)
-
-    # Add comments
-    ds[var_name].attrs['comments'] = 'Cropped and reprojected to EPSG:4326 by goesgcp'
 
     # Add global metadata comments
     ds.attrs['comments'] = "Data processed by goesgcp, author: Helvecio B. L. Neto (helvecioblneto@gmail.com)"
@@ -249,20 +260,18 @@ def crop_reproject(args):
     output_file = f"{output_directory}{file.split('/')[-1]}"
     ds.to_netcdf(output_file, mode='w', format='NETCDF4_CLASSIC')
 
-    # Fechar o dataset
     ds.close()
-    return
 
 
 def process_file(args):
-    """ Downloads and processes a file in parallel. """
+    """
+    Downloads and processes a GOES-16 file.
+    """
+    
+    bucket_name, blob_name, local_path, output_path, var_name, lat_min, lat_max, lon_min, lon_max, resolution, \
+    save_format, retries = args
 
-    bucket_name, blob_name, local_path = args
-
-    # Download options
-    retries = 5
     attempt = 0
-
     while attempt < retries:
         try:
             # Connect to the bucket
@@ -282,31 +291,29 @@ def process_file(args):
                     log_file.write(f"Failed to download {blob_name} after {retries} attempts. Error: {e}\n")
 
     # Crop the file
-    crop_reproject((local_path, output_path))
+    crop_reproject((local_path, output_path, var_name, lat_min, lat_max, lon_min, lon_max, resolution, save_format))
 
     # Remove the local file
     pathlib.Path(local_path).unlink()
 
 
+# Create connection
+storage_client = storage.Client.create_anonymous_client()
+
 def main():
     ''' Main function to download and process GOES-16 files. '''
-
-
-    global output_path, var_name, \
-          lat_min, lat_max, lon_min, lon_max, \
-          max_attempts, parallel, recent, resolution, storage_client, \
-            satellite, product, op_mode, channel, save_format
 
     epilog = """
     Example usage:
     
-    - To download recent 3 files from the GOES-16 satellite for the ABI-L2-CMIPF product:
+    - To download recent 3 files from the GOES-16 satellite for the ABI-L2-CMIPF product,
+    change resolution to 0.045, and crop the files between latitudes -35 and 5 and longitudes -80 and -30:
 
-    goesgcp --satellite goes16 --product ABI-L2-CMIP --recent 3
+    goesgcp --satellite goes-16 --product ABI-L2-CMIPF --recent 3 --resolution 0.045 --lat_min -35 --lat_max 5 --lon_min -80 --lon_max -30
 
     - To download files from the GOES-16 satellite for the ABI-L2-CMIPF product between 2022-12-15 and 2022-12-20:
 
-    goesgcp --start '2022-12-15 00:00:00' --end '2022-12-20 10:00:00' --bt_hour 5 6 --save_format by_date --resolution 0.045 --lat_min -35 --lat_max 5 --lon_min -80 --lon_max -30
+    goesgcp --satellite goes-16 --product ABI-L2-CMIPF --start '2022-12-15 00:00:00' --end '2022-12-20 10:00:00' --resolution 0.045 --lat_min -35 --lat_max 5 --lon_min -80 --lon_max -30
 
     """
 
@@ -329,14 +336,14 @@ def main():
     ]
 
     # Set arguments
-    parser = argparse.ArgumentParser(description='Converts GOES-16 L2 data to netCDF',
+    parser = argparse.ArgumentParser(description='Download and process GOES Satellite data files from GCP.',
                                     epilog=epilog,
                                     formatter_class=argparse.RawDescriptionHelpFormatter)
     
     # Satellite and product settings
     parser.add_argument('--satellite', type=str, default='goes-16', choices=['goes-16', 'goes-18'], help='Name of the satellite (e.g., goes16)')
-    parser.add_argument('--product', type=str, default='ABI-L2-CMIP', help='Name of the satellite product', choices=product_names)
-    parser.add_argument('--var_name', type=str, default='CMI', help='Variable name to extract (e.g., CMI)')
+    parser.add_argument('--product', type=str, default='ABI-L2-CMIPF', help='Name of the satellite product', choices=product_names)
+    parser.add_argument('--var_name', type=str, default=None, help='Variable name to extract (e.g., CMI)')
     parser.add_argument('--channel', type=int, default=13, help='Channel to use (e.g., 13)')
     parser.add_argument('--op_mode', type=str, default='M6C', help='Operational mode to use (e.g., M6C)')
 
@@ -407,9 +414,6 @@ def main():
     # Create output directory
     pathlib.Path(output_path).mkdir(parents=True, exist_ok=True)
 
-    # Create connection
-    storage_client = storage.Client.create_anonymous_client()
-
     # Check if the bucket exists
     try:
         storage_client.get_bucket(bucket_name)
@@ -445,7 +449,9 @@ def main():
     
     if parallel: # Run in parallel
         # Create a list of tasks
-        tasks = [(bucket_name, file, f"tmp/{file.split('/')[-1]}") for file in files_list]
+        tasks = [(bucket_name, file, f"tmp/{file.split('/')[-1]}", output_path, var_name, 
+        lat_min, lat_max, lon_min, lon_max, resolution,
+        save_format, max_attempts) for file in files_list]
 
         # Download files in parallel
         with Pool(processes=args.processes) as pool:
@@ -455,11 +461,12 @@ def main():
     else: # Run in serial
         for file in files_list:
             local_path = f"tmp/{file.split('/')[-1]}"
-            process_file((bucket_name, file, local_path))
+            process_file((bucket_name, file, local_path, output_path, var_name,
+            lat_min, lat_max, lon_min, lon_max, resolution,
+            save_format, max_attempts))
             loading_bar.update(1)
         loading_bar.close()
 
-    # Remove temporary directory
     shutil.rmtree('tmp/')
 
 if __name__ == '__main__':
