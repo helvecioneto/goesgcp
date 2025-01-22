@@ -55,7 +55,7 @@ goesgcp [OPTIONS]
 | `--save_format`       | Format for saving output files (default: `by_date`).                      |
 
 #### Available GOES Products
-A comprehensive list of available GOES products can be found at the following link: [https://github.com/awslabs/open-data-docs/tree/main/docs/noaa/noaa-goes16](https://github.com/awslabs/open-data-docs/tree/main/docs/noaa/noaa-goes16)
+A comprehensive list of available GOES products can be found at the following link: [https://console.cloud.google.com/storage/browser/gcp-public-data-goes-16](https://console.cloud.google.com/storage/browser/gcp-public-data-goes-16)
 
 ### Examples
 
