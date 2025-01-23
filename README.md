@@ -7,7 +7,7 @@
 <!-- badges: end -->
 
 
-`goesgcp` is a Python utility designed for downloading and reprojecting GOES-R satellite data. This script leverages the `google.cloud` library for accessing data from the Google Cloud Platform (GCP) and `rioxarray` for reprojecting data to EPSG:4326 (retangular grid), as well cropping it to a user-defined bounding box.
+`goesgcp` is a Python utility designed for downloading and reprojecting GOES-R satellite data. This script leverages the `google.cloud` library for accessing data from the Google Cloud Platform (GCP) and `rioxarray` for reprojecting data to EPSG:4326 (rectangular grid), as well cropping it to a user-defined bounding box.
 
 ## Features
 
@@ -27,7 +27,7 @@ pip install goesgcp
 
 ## Usage
 
-### Command-Line Arguments
+### Available Command-Line Arguments
 
 The script uses the `argparse` module for handling command-line arguments. Below are the available options:
 
