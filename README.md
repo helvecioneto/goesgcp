@@ -63,7 +63,7 @@ A comprehensive list of available GOES products can be found at the following li
 In the example below, the command downloads the 3 most recent files from the GOES-16 satellite for the product ABI-L2-CMIPF. It focuses on the variable CMI (Cloud and Moisture Imagery) from channel 13, which is commonly used for infrared observations. The downloaded files are saved to the specified output directory output/.
 
 ```bash
-goesgcp --satellite goes-16 --product ABI-L2-CMIPF --recent 3 --output "output/"
+goesgcp --satellite goes-16 --recent 3 --product ABI-L2-CMIPF --var_name CMI --channel 13 --output "output/"
 ```
 
 #### Download Data for a Specific Time Range
