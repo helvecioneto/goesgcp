@@ -18,7 +18,7 @@
 
 ## Installation
 
-Install the necessary dependencies via `pip`:
+Install the package via `pip`:
 
 ```bash
 pip install goesgcp
