@@ -11,7 +11,7 @@
 
 ## Features
 
-- **Download GOES-R satellite data**: Supports GOES-16 and GOES-17.
+- **Download GOES-R satellite data**: Supports GOES-16 and GOES-18.
 - **Reprojection and cropping**: Reprojects data to EPSG:4326 and crops to a specified bounding box.
 - **Flexible command-line interface**: Customize download options, variables, channels, time range, and output format.
 - **Efficient processing**: Handles large datasets with optimized performance.
