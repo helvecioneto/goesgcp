@@ -70,7 +70,7 @@ goesgcp --satellite goes-16 --recent 3 --product ABI-L2-CMIPF --var_name CMI --c
 This command retrieves GOES-16 satellite data for the product ABI-L2-CMIPF within the date range 2022-12-15 00:00:00 to 2022-12-15 12:00:00, focusing on hours 5:00 and 6:00 AM. The data is cropped to the geographic bounds of -35° to 5° latitude and -80° to -30° longitude, reprojected with a resolution of 0.045 degrees, and saved in a by_date format for easy organization.
 
 ```bash
-goesgcp --satellite goes-16 --product ABI-L2-CMIPF --start '2022-12-15 00:00:00' --end '2022-12-15 12:00:00' --bt_hour 5 6 --save_format by_date --resolution 0.045 --lat_min -35 --lat_max 5 --lon_min -80 --lon_max -30
+goesgcp --satellite goes-16 --product ABI-L2-CMIPF --start "2022-12-15 00:00:00" --end "2022-12-15 12:00:00" --bt_hour 5 6 --save_format by_date --resolution 0.045 --lat_min -35 --lat_max 5 --lon_min -80 --lon_max -30
 ```
 
 ### Contributing
