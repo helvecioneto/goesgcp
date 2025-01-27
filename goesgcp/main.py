@@ -34,7 +34,7 @@ def get_directory_prefix(year, julian_day, hour):
 
 
 def get_files_period(connection, bucket_name, base_prefix, pattern, 
-                     start, end, bt_hour=[0, 23], bt_min=[0, 60], freq='10 min'):
+                     start, end, bt_hour=[], bt_min=[], freq=None):
     """
     Fetches files from a GCP bucket within a specified time period and returns them as a DataFrame.
 
@@ -90,7 +90,6 @@ def get_files_period(connection, bucket_name, base_prefix, pattern,
     # Transform file_name to datetime
     df['last_modified'] = pd.to_datetime(df['file_name'].str.extract(r'(\d{4}\d{3}\d{2}\d{2})').squeeze(), format='%Y%j%H%M')
 
-    
     # Ensure 'last_modified' is in the correct datetime format without timezone
     df['last_modified'] = pd.to_datetime(df['last_modified']).dt.tz_localize('UTC')
 
@@ -98,16 +97,19 @@ def get_files_period(connection, bucket_name, base_prefix, pattern,
     df = df[(df['last_modified'] >= start) & (df['last_modified'] <= end)]
 
     # Filter the DataFrame based on the hour range
-    df['hour'] = df['last_modified'].dt.hour
-    df = df[(df['hour'] >= bt_hour[0]) & (df['hour'] <= bt_hour[1])]
+    if len(bt_hour) > 1:
+        df['hour'] = df['last_modified'].dt.hour
+        df = df[(df['hour'] >= bt_hour[0]) & (df['hour'] <= bt_hour[1])]
 
     # Filter the DataFrame based on the minute range
-    df['minute'] = df['last_modified'].dt.minute
-    df = df[(df['minute'] >= bt_min[0]) & (df['minute'] <= bt_min[1])]
+    if len(bt_min) > 1:
+        df['minute'] = df['last_modified'].dt.minute
+        df = df[(df['minute'] >= bt_min[0]) & (df['minute'] <= bt_min[1])]
 
     # Filter the DataFrame based on the frequency
-    df['freq'] = df['last_modified'].dt.floor(freq)
-    df = df.groupby('freq').first().reset_index()
+    if freq is not None:
+        df['freq'] = df['last_modified'].dt.floor(freq)
+        df = df.groupby('freq').first().reset_index()
 
     return df['file_name'].tolist()
 
