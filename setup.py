@@ -13,7 +13,7 @@ with open('requirements.txt') as f:
 
 setup(
     name="goesgcp",
-    version='2.0.3',
+    version='2.0.4',
     author="Helvecio B. L. Neto",
     author_email="helvecioblneto@gmail.com",
     description="A package to download and process GOES-16/17 data",
