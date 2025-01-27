@@ -321,7 +321,7 @@ def main():
 
     - To download files from the GOES-16 satellite for the ABI-L2-CMIPF product between 2022-12-15 and 2022-12-20:
 
-    goesgcp --satellite goes-16 --product ABI-L2-CMIPF --start '2022-12-15 09:00:00' --end '2022-12-15 09:50:00' --resolution 0.045 --lat_min -35 --lat_max 5 --lon_min -80 --lon_max -30
+    goesgcp --satellite goes-16 --product ABI-L2-CMIPF --start "2022-12-15 09:00:00" --end "2022-12-15 09:50:00" --resolution 0.045 --lat_min -35 --lat_max 5 --lon_min -80 --lon_max -30
 
     """
 
