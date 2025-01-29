@@ -2,6 +2,7 @@
 <!-- badges: start -->
 [![pypi](https://badge.fury.io/py/goesgcp.svg)](https://pypi.python.org/pypi/goesgcp)
 [![Downloads](https://img.shields.io/pypi/dm/goesgcp.svg)](https://pypi.python.org/pypi/goesgcp)
+[![Upload Python Package](https://github.com/helvecioneto/goesgcp/actions/workflows/python-publish.yml/badge.svg)](https://github.com/helvecioneto/goesgcp/actions/workflows/python-publish.yml)
 [![Contributors](https://img.shields.io/github/contributors/helvecioneto/goesgcp.svg)](https://github.com/helvecioneto/goesgcp/graphs/contributors)
 [![License](https://img.shields.io/pypi/l/goesgcp.svg)](https://github.com/helvecioneto/goesgcp/blob/main/LICENSE)
 <!-- badges: end -->
