@@ -12,6 +12,15 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
+      - name: Verificar arquivos do diretório
+        run: ls -la
+      - name: Criar requirements.txt se não existir
+        run: |
+          if [ ! -f requirements.txt ]; then
+            echo "requirements.txt não encontrado. Criando um temporário..."
+            touch requirements.txt
+          fi
+          
       - name: Checkout
         uses: actions/checkout@v4
 
