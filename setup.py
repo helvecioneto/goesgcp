@@ -8,8 +8,12 @@ except:
 
 from setuptools import setup, find_packages
 
-with open('requirements.txt') as f:
-    requirements = f.read().splitlines()
+req_file = os.path.join(os.path.dirname(__file__), "requirements.txt")
+if os.path.exists(req_file):
+    with open(req_file) as f:
+        requirements = f.read().splitlines()
+else:
+    requirements = []
 
 setup(
     name="goesgcp",
