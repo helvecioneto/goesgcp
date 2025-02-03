@@ -2,6 +2,7 @@ import pathlib
 import shutil
 import time
 import xarray as xr
+import subprocess
 import argparse
 import sys
 import tqdm
@@ -269,7 +270,64 @@ def crop_reproject(args):
     output_file = f"{output_directory}{file.split('/')[-1]}"
     ds.to_netcdf(output_file, mode='w')
 
+    # Close the file
     ds.close()
+
+    return output_file
+
+
+
+def remap_file(args):
+    """ Remap the download file based on the input file. """
+
+    base_file, target_file, var_name, save_format, output = args
+
+    # Open the files
+    base_ds = xr.open_dataset(base_file, engine="netcdf4")
+
+    if save_format == 'by_date':
+        file_datetime = datetime.strptime(base_ds.time_coverage_start, 
+                                          "%Y-%m-%dT%H:%M:%S.%fZ")
+        year = file_datetime.strftime("%Y")
+        month = file_datetime.strftime("%m")
+        day = file_datetime.strftime("%d")
+        output_directory = f"{output}{year}/{month}/{day}/"
+    elif save_format == 'julian':
+        file_datetime = datetime.strptime(base_ds.time_coverage_start, 
+                                          "%Y-%m-%dT%H:%M:%S.%fZ")
+        year = file_datetime.strftime("%Y")
+        julian_day = file_datetime.timetuple().tm_yday
+        output_directory = f"{output}{year}/{julian_day}/"
+    else:
+        output_directory = output
+
+    # Create the output directory
+    pathlib.Path(output_directory).mkdir(parents=True, exist_ok=True)
+
+    output_file = f"{output_directory}{target_file.split('/')[-1]}"
+
+    # Add _ into output_file to prevent overwrite
+    output_file = output_file.replace(".nc", "_remap.nc")
+
+    # Run the cdo command
+    cdo_command = [
+        "cdo", "remapbil," + base_file, target_file, output_file
+    ]
+
+    try:
+        subprocess.run(cdo_command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except subprocess.CalledProcessError as e:
+        print(f"Error remapping file {target_file}: {e}")
+        pass
+
+    # Close the files
+    base_ds.close()
+
+    # Delete the target file
+    pathlib.Path(target_file).unlink()
+
+    # Rename the output file
+    pathlib.Path(output_file).rename(target_file)
 
 
 def process_file(args):
@@ -278,7 +336,7 @@ def process_file(args):
     """
     
     bucket_name, blob_name, local_path, output_path, var_name, lat_min, lat_max, lon_min, lon_max, resolution, \
-    save_format, retries = args
+    save_format, retries, remap = args
 
     attempt = 0
     while attempt < retries:
@@ -300,10 +358,16 @@ def process_file(args):
                     log_file.write(f"Failed to download {blob_name} after {retries} attempts. Error: {e}\n")
 
     # Crop the file
-    crop_reproject((local_path, output_path, var_name, lat_min, lat_max, lon_min, lon_max, resolution, save_format))
+    output_file = crop_reproject((local_path, output_path, var_name,
+                                   lat_min, lat_max, lon_min, lon_max, resolution, save_format))
+
+    # Remap the file
+    if remap is not None:
+        # Remap the file
+        remap_file((remap, output_file, var_name, save_format, output_path))
 
     # Remove the local file
-    pathlib.Path(local_path).unlink()
+    # pathlib.Path(local_path).unlink()
 
 # Create connection
 storage_client = storage.Client.create_anonymous_client()
@@ -373,6 +437,9 @@ def main():
     parser.add_argument('--resolution', type=float, default=0.03208, help='Resolution of the output file')
     parser.add_argument('--output', type=str, default='output/', help='Path for saving output files')
 
+    # Remap
+    parser.add_argument('--remap', type=str, default=None, help='Give a input file to remap the output')
+
     # Other settings
     parser.add_argument('--parallel', type=lambda x: bool(strtobool(x)), default=True, help='Use parallel processing')
     parser.add_argument('--processes', type=int, default=4, help='Number of processes for parallel execution')
@@ -409,6 +476,7 @@ def main():
     bt_hour = args.bt_hour
     bt_min = args.bt_min
     save_format = args.save_format
+    remap = args.remap
 
 
     # Check mandatory arguments
@@ -466,7 +534,7 @@ def main():
         # Create a list of tasks
         tasks = [(bucket_name, file, f"tmp/{file.split('/')[-1]}", output_path, var_name, 
         lat_min, lat_max, lon_min, lon_max, resolution,
-        save_format, max_attempts) for file in files_list]
+        save_format, max_attempts, remap) for file in files_list]
 
         # Download files in parallel
         with Pool(processes=args.processes) as pool:
@@ -478,11 +546,11 @@ def main():
             local_path = f"tmp/{file.split('/')[-1]}"
             process_file((bucket_name, file, local_path, output_path, var_name,
             lat_min, lat_max, lon_min, lon_max, resolution,
-            save_format, max_attempts))
+            save_format, max_attempts, remap))
             loading_bar.update(1)
         loading_bar.close()
 
-    shutil.rmtree('tmp/')
+    # shutil.rmtree('tmp/')
 
 if __name__ == '__main__':
     main()

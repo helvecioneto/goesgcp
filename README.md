@@ -54,6 +54,7 @@ goesgcp [OPTIONS]
 | `--bt_hour`           | Hour of the day to download data (default: [0, 1, ..., 23]).              |
 | `--bt_minute`         | Minute of the hour to download data (default: [0, 15, 30, 45]).           |
 | `--save_format`       | Format for saving output files (default: `by_date`).                      |
+| `--remap`             | Remap the data based on file (This function are in development).          |
 
 #### Available GOES Products
 A comprehensive list of available GOES products can be found at the following link: [https://console.cloud.google.com/storage/browser/gcp-public-data-goes-16](https://console.cloud.google.com/storage/browser/gcp-public-data-goes-16)
