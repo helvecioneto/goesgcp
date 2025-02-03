@@ -367,7 +367,7 @@ def process_file(args):
         remap_file((remap, output_file, var_name, save_format, output_path))
 
     # Remove the local file
-    # pathlib.Path(local_path).unlink()
+    pathlib.Path(local_path).unlink()
 
 # Create connection
 storage_client = storage.Client.create_anonymous_client()
@@ -550,7 +550,7 @@ def main():
             loading_bar.update(1)
         loading_bar.close()
 
-    # shutil.rmtree('tmp/')
+    shutil.rmtree('tmp/')
 
 if __name__ == '__main__':
     main()
