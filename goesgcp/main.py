@@ -286,14 +286,14 @@ def remap_file(args):
     base_ds = xr.open_dataset(base_file, engine="netcdf4")
 
     if save_format == 'by_date':
-        file_datetime = datetime.strptime(base_ds.time_coverage_start, 
+        file_datetime = datetime.strptime(ds.time_coverage_start, 
                                           "%Y-%m-%dT%H:%M:%S.%fZ")
         year = file_datetime.strftime("%Y")
         month = file_datetime.strftime("%m")
         day = file_datetime.strftime("%d")
         output_directory = f"{output}{year}/{month}/{day}/"
     elif save_format == 'julian':
-        file_datetime = datetime.strptime(base_ds.time_coverage_start, 
+        file_datetime = datetime.strptime(ds.time_coverage_start, 
                                           "%Y-%m-%dT%H:%M:%S.%fZ")
         year = file_datetime.strftime("%Y")
         julian_day = file_datetime.timetuple().tm_yday
@@ -311,7 +311,7 @@ def remap_file(args):
 
     # Run the cdo command
     cdo_command = [
-        "cdo", "remapbil," + base_file, target_file, output_file
+        "cdo", "remapnn," + base_file, target_file, output_file
     ]
 
     try:
