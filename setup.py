@@ -8,9 +8,15 @@ except:
 
 from setuptools import setup, find_packages
 
-with open('requirements.txt') as f:
-    required = f.read().splitlines()
-
+def get_requirements(requirements_filename):
+    requirements_file = Path(__file__).parent / requirements_filename
+    assert requirements_file.exists()
+    with open(requirements_file) as f:
+        requirements = [
+            line.strip() for line in f.readlines() if not line.startswith("#")
+        ]
+    return requirements
+    
 setup(
     name="goesgcp",
     version='2.0.8',
@@ -21,7 +27,7 @@ setup(
     long_description_content_type="text/markdown",
     url="https://github.com/helvecioneto/goesgcp",
     packages=find_packages(),
-    install_requires=requirements,
+    install_requires=get_requirements("requirements.txt"),
     license="LICENSE",
     classifiers=[
         "Programming Language :: Python",
