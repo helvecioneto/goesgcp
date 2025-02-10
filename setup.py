@@ -8,16 +8,12 @@ except:
 
 from setuptools import setup, find_packages
 
-req_file = os.path.join(os.path.dirname(__file__), "requirements.txt")
-if os.path.exists(req_file):
-    with open(req_file) as f:
-        requirements = f.read().splitlines()
-else:
-    requirements = []
+with open('requirements.txt') as f:
+    required = f.read().splitlines()
 
 setup(
     name="goesgcp",
-    version='2.0.7',
+    version='2.0.8',
     author="Helvecio B. L. Neto",
     author_email="helvecioblneto@gmail.com",
     description="A package to download and process GOES-16/17 data",
