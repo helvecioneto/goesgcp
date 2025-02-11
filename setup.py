@@ -8,6 +8,11 @@ except:
 
 from setuptools import setup, find_packages
 
+from pathlib import Path
+
+with open("requirements.txt") as f:
+    requirements = f.read().splitlines()
+
 setup(
     name="goesgcp",
     version='2.0.8',
@@ -18,11 +23,7 @@ setup(
     long_description_content_type="text/markdown",
     url="https://github.com/helvecioneto/goesgcp",
     packages=find_packages(),
-    install_requires=['google-cloud-storage',
-                      'pyproj',
-                      'xarray',
-                      'netcdf4',
-                      'rioxarray'],
+    install_requires=requirements,
     license="LICENSE",
     classifiers=[
         "Programming Language :: Python",
