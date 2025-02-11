@@ -8,7 +8,10 @@ except:
 
 from setuptools import setup, find_packages
 
-with open('requirements.txt') as f:
+from pathlib import Path
+
+# Lendo o arquivo requirements.txt
+with open(Path(__file__).parent / "requirements.txt", encoding="utf-8") as f:
     requirements = f.read().splitlines()
 
 setup(
