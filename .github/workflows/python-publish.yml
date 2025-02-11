@@ -12,7 +12,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:         
-      - name: Checkout
+      - name: Checkout do código
         uses: actions/checkout@v4
 
       - name: Configurar Python
@@ -24,6 +24,16 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install build
+
+      - name: Verificar arquivos no repositório
+        run: ls -lah
+
+      - name: Garantir que o requirements.txt existe
+        run: |
+          if [ ! -f "requirements.txt" ]; then
+            echo "❌ ERROR: requirements.txt não encontrado!"
+            exit 1
+          fi
 
       - name: Criar distribuição do pacote
         run: python -m build
@@ -50,6 +60,9 @@ jobs:
         with:
           name: release-dists
           path: dist/
+
+      - name: Listar arquivos antes da publicação
+        run: ls -lah dist/
 
       - name: Publicar no PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
