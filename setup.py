@@ -1,3 +1,4 @@
+
 import os
 
 try:
@@ -8,15 +9,16 @@ except:
 
 from setuptools import setup, find_packages
 
-from pathlib import Path
-
-# Lendo o arquivo requirements.txt
-with open(Path(__file__).parent / "requirements.txt", encoding="utf-8") as f:
-    requirements = f.read().splitlines()
+req_file = os.path.join(os.path.dirname(__file__), "requirements.txt")
+if os.path.exists(req_file):
+    with open(req_file) as f:
+        requirements = f.read().splitlines()
+else:
+    requirements = []
 
 setup(
     name="goesgcp",
-    version='2.0.8',
+    version="2.0.8",
     author="Helvecio B. L. Neto",
     author_email="helvecioblneto@gmail.com",
     description="A package to download and process GOES-16/17 data",
@@ -33,13 +35,6 @@ setup(
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
-        "Topic :: Scientific/Engineering",
-        "Topic :: Software Development",
-        "Topic :: Utilities",
-    ],
-    entry_points={
-        'console_scripts': [
-            'goesgcp=goesgcp.main:main',
-        ],
-    },
+        "Topic :: Scientific/Engineering :: Remote Sensing",
+    ]
 )
