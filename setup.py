@@ -18,7 +18,7 @@ else:
 
 setup(
     name="goesgcp",
-    version="2.0.8",
+    version="2.0.9",
     author="Helvecio B. L. Neto",
     author_email="helvecioblneto@gmail.com",
     description="A package to download and process GOES-16/17 data",
@@ -35,6 +35,15 @@ setup(
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
-        "Topic :: Scientific/Engineering :: Remote Sensing",
-    ]
+	    "Topic :: Scientific/Engineering :: Atmospheric Science",
+        "Topic :: Scientific/Engineering :: GIS",
+        "Topic :: Scientific/Engineering",
+        "Topic :: Software Development",
+        "Topic :: Utilities",
+    ],
+    entry_points={
+        'console_scripts': [
+            'goesgcp=goesgcp.main:main',
+        ],
+    },
 )
