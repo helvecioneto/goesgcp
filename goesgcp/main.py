@@ -280,7 +280,7 @@ def crop_reproject(args):
 def remap_file(args):
     """ Remap the download file based on the input file. """
 
-    base_file, target_file, var_name, save_format, output = args
+    base_file, target_file, var_name, save_format, output, method = args
 
     # Open the files
     base_ds = xr.open_dataset(base_file, engine="netcdf4")
@@ -311,7 +311,7 @@ def remap_file(args):
 
     # Run the cdo command
     cdo_command = [
-        "cdo", "remapnn," + base_file, target_file, output_file
+        "cdo", method+"," + base_file, target_file, output_file
     ]
 
     try:
@@ -336,7 +336,7 @@ def process_file(args):
     """
     
     bucket_name, blob_name, local_path, output_path, var_name, lat_min, lat_max, lon_min, lon_max, resolution, \
-    save_format, retries, remap = args
+    save_format, retries, remap, met = args
 
     attempt = 0
     while attempt < retries:
@@ -364,7 +364,7 @@ def process_file(args):
     # Remap the file
     if remap is not None:
         # Remap the file
-        remap_file((remap, output_file, var_name, save_format, output_path))
+        remap_file((remap, output_file, var_name, save_format, output_path, met))
 
     # Remove the local file
     pathlib.Path(local_path).unlink()
@@ -439,6 +439,8 @@ def main():
 
     # Remap
     parser.add_argument('--remap', type=str, default=None, help='Give a input file to remap the output')
+    parser.add_argument('--method', type=str, default='remapnn', help='Remap method to use (e.g., remapnn)')
+
 
     # Other settings
     parser.add_argument('--parallel', type=lambda x: bool(strtobool(x)), default=True, help='Use parallel processing')
@@ -477,6 +479,7 @@ def main():
     bt_min = args.bt_min
     save_format = args.save_format
     remap = args.remap
+    method = args.method
 
 
     # Check mandatory arguments
@@ -510,8 +513,8 @@ def main():
     # Check operational mode if is recent or specific date
     if start and end:
         files_list = get_files_period(storage_client, bucket_name,
-                                       product, pattern, start, end,
-                                        bt_hour, bt_min, freq)
+                                    product, pattern, start, end,
+                                    bt_hour, bt_min, freq)
     else:
         # Get recent files
         files_list = get_recent_files(storage_client, bucket_name, product, pattern, recent)
@@ -534,7 +537,7 @@ def main():
         # Create a list of tasks
         tasks = [(bucket_name, file, f"tmp/{file.split('/')[-1]}", output_path, var_name, 
         lat_min, lat_max, lon_min, lon_max, resolution,
-        save_format, max_attempts, remap) for file in files_list]
+        save_format, max_attempts, remap, method) for file in files_list]
 
         # Download files in parallel
         with Pool(processes=args.processes) as pool:
@@ -546,7 +549,7 @@ def main():
             local_path = f"tmp/{file.split('/')[-1]}"
             process_file((bucket_name, file, local_path, output_path, var_name,
             lat_min, lat_max, lon_min, lon_max, resolution,
-            save_format, max_attempts, remap))
+            save_format, max_attempts, remap, method))
             loading_bar.update(1)
         loading_bar.close()
 
