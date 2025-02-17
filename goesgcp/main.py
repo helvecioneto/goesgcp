@@ -161,10 +161,10 @@ def crop_reproject(args):
     Crops and reprojects a GOES-16 file to EPSG:4326.
     """
 
-    file, output, var_name, lat_min, lat_max, lon_min, lon_max, resolution, save_format = args
+    file, output, var_name, lat_min, lat_max, lon_min, lon_max, resolution, save_format, more_info, file_pattern, classic_format = args
 
     # Open the file
-    ds = xr.open_dataset(file, engine="netcdf4")
+    ds = xr.open_dataset(file, engine="netcdf4", decode_cf=False)
 
     if var_name is None:
         # Get all variables are 2D
@@ -174,6 +174,20 @@ def crop_reproject(args):
         var_names = [var for var in var_names if 'DQF' not in var]
     else:
         var_names = [var_name]
+
+    # Get satellite position based on latitude_of_projection_origin
+    sat_lat = ds["goes_imager_projection"].attrs["latitude_of_projection_origin"]
+    sat_lon = ds["goes_imager_projection"].attrs["longitude_of_projection_origin"]
+
+    # Get all scale_factor and add_offset
+    scale_factors = [ds[var].attrs["scale_factor"] for var in var_names]
+    add_offsets = [ds[var].attrs["add_offset"] for var in var_names]
+
+    # Close the file with decode_cf=False
+    ds.close()
+
+    # Open again with decode_cf=True
+    ds = xr.open_dataset(file, engine="netcdf4")
 
     # Select only var_name and goes_imager_projection
     ds = ds[var_names + ["goes_imager_projection"]]
@@ -242,10 +256,22 @@ def crop_reproject(args):
 
         # Add global metadata comments
         ds.attrs['comments'] = "Data processed by goesgcp, author: Helvecio B. L. Neto (helvecioblneto@gmail.com)"
+
+        # Add satellite position
+        ds["satlat"] = sat_lat.astype('float32')
+        ds["satlat"].attrs['comment'] = ds['satlat'].values
+        # Add satellite longitude
+        ds["satlon"] = sat_lon.astype('float32')
+        ds["satlon"].attrs['comment'] = ds['satlon'].values
+        # Restore scale_factor and add_offset change name to scale-factor and add-offset
+        for var, scale_factor, add_offset in zip(var_names, scale_factors, add_offsets):
+            ds[var].attrs['scale-factor'] = scale_factor
+            ds[var].attrs['add-offset'] = add_offset
+
     except Exception as e:
         print(f"Error processing file {file}: {e}")
-        pass    
-    
+        pass
+   
     if save_format == 'by_date':
         file_datetime = datetime.strptime(ds.time_coverage_start, 
                                           "%Y-%m-%dT%H:%M:%S.%fZ")
@@ -261,14 +287,30 @@ def crop_reproject(args):
         output_directory = f"{output}{year}/{julian_day}/"
     else:
         output_directory = output
-        
 
     # Create the output directory
     pathlib.Path(output_directory).mkdir(parents=True, exist_ok=True)
 
-    # Save the file
-    output_file = f"{output_directory}{file.split('/')[-1]}"
-    ds.to_netcdf(output_file, mode='w')
+    if file_pattern is not None:
+        # Get the timestamp
+        file_datetime = datetime.strptime(ds.time_coverage_start, 
+                                          "%Y-%m-%dT%H:%M:%S.%fZ")
+        
+        # Format to file pattern
+        file_pattern = file_datetime.strftime(file_pattern)
+
+        # Save the file
+        output_file = f"{output_directory}{file_pattern}.nc"
+    else:
+        # Save the file
+        output_file = f"{output_directory}{file.split('/')[-1]}"
+
+    # Write the file
+    if classic_format:
+        # Write with decode_cf=False
+        ds.to_netcdf(output_file, mode='w', format='NETCDF3_CLASSIC', encoding={var: {'zlib': True} for var in var_names})
+    else:
+        ds.to_netcdf(output_file, mode='w', encoding={var: {'zlib': True} for var in var_names})
 
     # Close the file
     ds.close()
@@ -280,26 +322,14 @@ def crop_reproject(args):
 def remap_file(args):
     """ Remap the download file based on the input file. """
 
-    base_file, target_file, var_name, save_format, output, method = args
+    base_file, target_file, output, method = args
 
     # Open the files
     base_ds = xr.open_dataset(base_file, engine="netcdf4")
 
-    if save_format == 'by_date':
-        file_datetime = datetime.strptime(base_ds.time_coverage_start, 
-                                          "%Y-%m-%dT%H:%M:%S.%fZ")
-        year = file_datetime.strftime("%Y")
-        month = file_datetime.strftime("%m")
-        day = file_datetime.strftime("%d")
-        output_directory = f"{output}{year}/{month}/{day}/"
-    elif save_format == 'julian':
-        file_datetime = datetime.strptime(base_ds.time_coverage_start, 
-                                          "%Y-%m-%dT%H:%M:%S.%fZ")
-        year = file_datetime.strftime("%Y")
-        julian_day = file_datetime.timetuple().tm_yday
-        output_directory = f"{output}{year}/{julian_day}/"
-    else:
-        output_directory = output
+    # Get output directory based on target_file
+    output_file = f"{output}{target_file.split('/')[-1]}"
+    output_directory = output_file.replace(target_file.split('/')[-1], "")
 
     # Create the output directory
     pathlib.Path(output_directory).mkdir(parents=True, exist_ok=True)
@@ -336,38 +366,60 @@ def process_file(args):
     """
     
     bucket_name, blob_name, local_path, output_path, var_name, lat_min, lat_max, lon_min, lon_max, resolution, \
-    save_format, retries, remap, met = args
+    save_format, retries, remap, met, more_info, file_pattern, classic_format = args
 
-    attempt = 0
-    while attempt < retries:
-        try:
-            # Connect to the bucket
-            bucket = storage_client.bucket(bucket_name)
-            blob = bucket.blob(blob_name)
+    # attempt = 0
+    # while attempt < retries:
+    #     try:
+    #         # Connect to the bucket
+    #         bucket = storage_client.bucket(bucket_name)
+    #         blob = bucket.blob(blob_name)
 
-            # Download the file
-            blob.download_to_filename(local_path, timeout=120)
-            break  # Exit the loop if the download is successful
-        except (GoogleAPIError, Exception) as e:  # Catch any exception
-            attempt += 1
-            if attempt < retries:
-                time.sleep(2 ** attempt)  # Backoff exponencial
-            else:
-                # Log the error to a file
-                with open('fail.log', 'a') as log_file:
-                    log_file.write(f"Failed to download {blob_name} after {retries} attempts. Error: {e}\n")
+    #         # Download the file
+    #         blob.download_to_filename(local_path, timeout=120)
+    #         break  # Exit the loop if the download is successful
+    #     except (GoogleAPIError, Exception) as e:  # Catch any exception
+    #         attempt += 1
+    #         if attempt < retries:
+    #             time.sleep(2 ** attempt)  # Backoff exponencial
+    #         else:
+    #             # Log the error to a file
+    #             with open('fail.log', 'a') as log_file:
+    #                 log_file.write(f"Failed to download {blob_name} after {retries} attempts. Error: {e}\n")
 
     # Crop the file
     output_file = crop_reproject((local_path, output_path, var_name,
-                                   lat_min, lat_max, lon_min, lon_max, resolution, save_format))
+                                   lat_min, lat_max, lon_min, lon_max,
+                                   resolution, save_format, more_info,
+                                   file_pattern, classic_format))
 
     # Remap the file
     if remap is not None:
         # Remap the file
-        remap_file((remap, output_file, var_name, save_format, output_path, met))
+        remap_file((remap, output_file, output_path, met))
+
+    if more_info:
+        # Open output file
+        ds = xr.open_dataset(output_file, engine="netcdf4")
+
+        # Get timestamp
+        ds_stamp = datetime.strptime(ds.time_coverage_start, 
+                                          "%Y-%m-%dT%H:%M:%S.%fZ")
+        # Add variable julian_day as type short
+        ds["julian_day"] = ds_stamp.strftime("%j")
+        ds["julian_day"].attrs['comment'] = ds['julian_day'].values
+        # Add variable time_of_day is a Hour and Minute, save as char
+        ds["time_of_day"] = ds_stamp.strftime("%H%M")
+        ds["time_of_day"].attrs['comment'] = ds['time_of_day'].values
+        # Save the file
+        if classic_format:
+            ds.to_netcdf(output_file, mode='w', format='NETCDF3_CLASSIC')
+        else:
+            ds.to_netcdf(output_file, mode='w')
+        ds.close()
 
     # Remove the local file
-    pathlib.Path(local_path).unlink()
+    # pathlib.Path(local_path).unlink()
 
 # Create connection
 storage_client = storage.Client.create_anonymous_client()
@@ -446,10 +498,11 @@ def main():
     parser.add_argument('--parallel', type=lambda x: bool(strtobool(x)), default=True, help='Use parallel processing')
     parser.add_argument('--processes', type=int, default=4, help='Number of processes for parallel execution')
     parser.add_argument('--max_attempts', type=int, default=3, help='Number of attempts to download a file')
+    parser.add_argument('--info', type=lambda x: bool(strtobool(x)), default=True, help='Show information messages')
     parser.add_argument('--save_format', type=str, default='flat', choices=['flat', 'by_date','julian'],
                     help="Save the files in a flat structure or by date")
-
-
+    parser.add_argument('--file_pattern', type=str, default=None, help='Pattern for the files')
+    parser.add_argument('--netcdf_classic', type=lambda x: bool(strtobool(x)), default=False, help='Save the files in netCDF classic format')
     # Parse arguments
     args = parser.parse_args()
 
@@ -480,7 +533,9 @@ def main():
     save_format = args.save_format
     remap = args.remap
     method = args.method
-
+    more_info = args.info
+    file_pattern = args.file_pattern
+    classic_format = args.netcdf_classic
 
     # Check mandatory arguments
     if not args.recent and not (args.start and args.end):
@@ -537,7 +592,8 @@ def main():
         # Create a list of tasks
         tasks = [(bucket_name, file, f"tmp/{file.split('/')[-1]}", output_path, var_name, 
         lat_min, lat_max, lon_min, lon_max, resolution,
-        save_format, max_attempts, remap, method) for file in files_list]
+        save_format, max_attempts, remap, method, 
+        more_info, file_pattern, classic_format) for file in files_list]
 
         # Download files in parallel
         with Pool(processes=args.processes) as pool:
@@ -549,11 +605,12 @@ def main():
             local_path = f"tmp/{file.split('/')[-1]}"
             process_file((bucket_name, file, local_path, output_path, var_name,
             lat_min, lat_max, lon_min, lon_max, resolution,
-            save_format, max_attempts, remap, method))
+            save_format, max_attempts, remap, method, more_info,
+              file_pattern, classic_format))
             loading_bar.update(1)
         loading_bar.close()
 
-    shutil.rmtree('tmp/')
+    # shutil.rmtree('tmp/')
 
 if __name__ == '__main__':
     main()
