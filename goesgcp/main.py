@@ -368,24 +368,24 @@ def process_file(args):
     bucket_name, blob_name, local_path, output_path, var_name, lat_min, lat_max, lon_min, lon_max, resolution, \
     save_format, retries, remap, met, more_info, file_pattern, classic_format = args
 
-    # attempt = 0
-    # while attempt < retries:
-    #     try:
-    #         # Connect to the bucket
-    #         bucket = storage_client.bucket(bucket_name)
-    #         blob = bucket.blob(blob_name)
+    attempt = 0
+    while attempt < retries:
+        try:
+            # Connect to the bucket
+            bucket = storage_client.bucket(bucket_name)
+            blob = bucket.blob(blob_name)
 
-    #         # Download the file
-    #         blob.download_to_filename(local_path, timeout=120)
-    #         break  # Exit the loop if the download is successful
-    #     except (GoogleAPIError, Exception) as e:  # Catch any exception
-    #         attempt += 1
-    #         if attempt < retries:
-    #             time.sleep(2 ** attempt)  # Backoff exponencial
-    #         else:
-    #             # Log the error to a file
-    #             with open('fail.log', 'a') as log_file:
-    #                 log_file.write(f"Failed to download {blob_name} after {retries} attempts. Error: {e}\n")
+            # Download the file
+            blob.download_to_filename(local_path, timeout=120)
+            break  # Exit the loop if the download is successful
+        except (GoogleAPIError, Exception) as e:  # Catch any exception
+            attempt += 1
+            if attempt < retries:
+                time.sleep(2 ** attempt)  # Backoff exponencial
+            else:
+                # Log the error to a file
+                with open('fail.log', 'a') as log_file:
+                    log_file.write(f"Failed to download {blob_name} after {retries} attempts. Error: {e}\n")
 
     # Crop the file
     output_file = crop_reproject((local_path, output_path, var_name,
@@ -411,15 +411,16 @@ def process_file(args):
         # Add variable time_of_day is a Hour and Minute, save as char
         ds["time_of_day"] = ds_stamp.strftime("%H%M")
         ds["time_of_day"].attrs['comment'] = ds['time_of_day'].values
-        # Save the file
-        if classic_format:
-            ds.to_netcdf(output_file, mode='w', format='NETCDF3_CLASSIC')
-        else:
-            ds.to_netcdf(output_file, mode='w')
-        ds.close()
+        
+    # Save the file
+    if classic_format:
+        ds.to_netcdf(output_file, mode='w', format='NETCDF3_CLASSIC')
+    else:
+        ds.to_netcdf(output_file, mode='w')
+    ds.close()
 
     # Remove the local file
-    # pathlib.Path(local_path).unlink()
+    pathlib.Path(local_path).unlink()
 
 # Create connection
 storage_client = storage.Client.create_anonymous_client()
