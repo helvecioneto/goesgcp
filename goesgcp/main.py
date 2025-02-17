@@ -286,14 +286,14 @@ def remap_file(args):
     base_ds = xr.open_dataset(base_file, engine="netcdf4")
 
     if save_format == 'by_date':
-        file_datetime = datetime.strptime(ds.time_coverage_start, 
+        file_datetime = datetime.strptime(base_ds.time_coverage_start, 
                                           "%Y-%m-%dT%H:%M:%S.%fZ")
         year = file_datetime.strftime("%Y")
         month = file_datetime.strftime("%m")
         day = file_datetime.strftime("%d")
         output_directory = f"{output}{year}/{month}/{day}/"
     elif save_format == 'julian':
-        file_datetime = datetime.strptime(ds.time_coverage_start, 
+        file_datetime = datetime.strptime(base_ds.time_coverage_start, 
                                           "%Y-%m-%dT%H:%M:%S.%fZ")
         year = file_datetime.strftime("%Y")
         julian_day = file_datetime.timetuple().tm_yday
@@ -434,7 +434,7 @@ def main():
     parser.add_argument('--lat_max', type=float, default=81.3282, help='Maximum latitude of the bounding box')
     parser.add_argument('--lon_min', type=float, default=-156.2995, help='Minimum longitude of the bounding box')
     parser.add_argument('--lon_max', type=float, default=6.2995, help='Maximum longitude of the bounding box')
-    parser.add_argument('--resolution', type=float, default=0.03208, help='Resolution of the output file')
+    parser.add_argument('--resolution', type=float, default=0.01, help='Resolution of the output file')
     parser.add_argument('--output', type=str, default='output/', help='Path for saving output files')
 
     # Remap
