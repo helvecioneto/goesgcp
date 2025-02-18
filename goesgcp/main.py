@@ -309,16 +309,16 @@ def crop_reproject(args):
         # Save the file
         output_file = f"{output_directory}{file.split('/')[-1]}"
 
-    if remap:
-        remap_file((remap, output_file, output, method))
-
      # Write the file
     if classic_format:
         ds.to_netcdf(output_file, mode='w', format='NETCDF3_CLASSIC', encoding={var: {'zlib': True} for var in var_names})
     else:
         ds.to_netcdf(output_file, mode='w', encoding={var: {'zlib': True} for var in var_names})
-
     ds.close()
+
+    # Remap the file
+    if remap:
+        remap_file((remap, output_file, output, method))
 
 
 def remap_file(args):
@@ -464,7 +464,7 @@ def main():
     parser.add_argument('--lon_min', type=float, default=-156.2995, help='Minimum longitude of the bounding box')
     parser.add_argument('--lon_max', type=float, default=6.2995, help='Maximum longitude of the bounding box')
     parser.add_argument('--resolution', type=float, default=0.01, help='Resolution of the output file')
-    parser.add_argument('--output', type=str, default='output/', help='Path for saving output files')
+    parser.add_argument('--output', type=str, default='./output/', help='Path for saving output files')
 
     # Remap
     parser.add_argument('--remap', type=str, default=None, help='Give a input file to remap the output')
