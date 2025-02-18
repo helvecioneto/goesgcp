@@ -161,10 +161,11 @@ def crop_reproject(args):
     Crops and reprojects a GOES-16 file to EPSG:4326.
     """
 
-    file, output, var_name, lat_min, lat_max, lon_min, lon_max, resolution, save_format, more_info, file_pattern, classic_format = args
+    file, output, var_name, lat_min, lat_max, lon_min, lon_max, resolution, save_format, \
+    more_info, file_pattern, classic_format, remap, method = args
 
     # Open the file
-    ds = xr.open_dataset(file, engine="netcdf4", decode_cf=False)
+    ds = xr.open_dataset(file, engine="netcdf4")
 
     if var_name is None:
         # Get all variables are 2D
@@ -174,20 +175,6 @@ def crop_reproject(args):
         var_names = [var for var in var_names if 'DQF' not in var]
     else:
         var_names = [var_name]
-
-    # Get satellite position based on latitude_of_projection_origin
-    sat_lat = ds["goes_imager_projection"].attrs["latitude_of_projection_origin"]
-    sat_lon = ds["goes_imager_projection"].attrs["longitude_of_projection_origin"]
-
-    # Get all scale_factor and add_offset
-    scale_factors = [ds[var].attrs["scale_factor"] for var in var_names]
-    add_offsets = [ds[var].attrs["add_offset"] for var in var_names]
-
-    # Close the file with decode_cf=False
-    ds.close()
-
-    # Open again with decode_cf=True
-    ds = xr.open_dataset(file, engine="netcdf4")
 
     # Select only var_name and goes_imager_projection
     ds = ds[var_names + ["goes_imager_projection"]]
@@ -257,16 +244,23 @@ def crop_reproject(args):
         # Add global metadata comments
         ds.attrs['comments'] = "Data processed by goesgcp, author: Helvecio B. L. Neto (helvecioblneto@gmail.com)"
 
-        # Add satellite position
-        ds["satlat"] = sat_lat.astype('float32')
-        ds["satlat"].attrs['comment'] = ds['satlat'].values
-        # Add satellite longitude
-        ds["satlon"] = sat_lon.astype('float32')
-        ds["satlon"].attrs['comment'] = ds['satlon'].values
-        # Restore scale_factor and add_offset change name to scale-factor and add-offset
-        for var, scale_factor, add_offset in zip(var_names, scale_factors, add_offsets):
-            ds[var].attrs['scale-factor'] = scale_factor
-            ds[var].attrs['add-offset'] = add_offset
+        if more_info:
+            # Get all scale_factor and add_offset
+            ds_s = xr.open_dataset(file, engine="netcdf4", decode_cf=False)
+            scale_factors = [ds_s[var].attrs["scale_factor"] for var in var_names]
+            add_offsets = [ds_s[var].attrs["add_offset"] for var in var_names]
+            sat_lat = ds_s["goes_imager_projection"].attrs["latitude_of_projection_origin"]
+            sat_lon = ds_s["goes_imager_projection"].attrs["longitude_of_projection_origin"]
+            ds_s.close()
+            ds["satlat"] = sat_lat.astype('float32')
+            ds["satlat"].attrs['comment'] = ds['satlat'].values
+            # Add satellite longitude
+            ds["satlon"] = sat_lon.astype('float32')
+            ds["satlon"].attrs['comment'] = ds['satlon'].values
+            # Restore scale_factor and add_offset change name to scale-factor and add-offset
+            for var, scale_factor, add_offset in zip(var_names, scale_factors, add_offsets):
+                ds[var].attrs['scale-factor'] = scale_factor
+                ds[var].attrs['add-offset'] = add_offset
 
     except Exception as e:
         print(f"Error processing file {file}: {e}")
@@ -288,6 +282,16 @@ def crop_reproject(args):
     else:
         output_directory = output
 
+    
+    if more_info:
+        ds_stamp = datetime.strptime(ds.time_coverage_start, 
+                                          "%Y-%m-%dT%H:%M:%S.%fZ")
+        ds["julian_day"] = ds_stamp.strftime("%j")
+        ds["julian_day"].attrs['comment'] = ds['julian_day'].values
+        # Add variable time_of_day is a Hour and Minute, save as char
+        ds["time_of_day"] = ds_stamp.strftime("%H%M")
+        ds["time_of_day"].attrs['comment'] = ds['time_of_day'].values
+
     # Create the output directory
     pathlib.Path(output_directory).mkdir(parents=True, exist_ok=True)
 
@@ -305,18 +309,16 @@ def crop_reproject(args):
         # Save the file
         output_file = f"{output_directory}{file.split('/')[-1]}"
 
-    # Write the file
+    if remap:
+        remap_file((remap, output_file, output, method))
+
+     # Write the file
     if classic_format:
-        # Write with decode_cf=False
         ds.to_netcdf(output_file, mode='w', format='NETCDF3_CLASSIC', encoding={var: {'zlib': True} for var in var_names})
     else:
         ds.to_netcdf(output_file, mode='w', encoding={var: {'zlib': True} for var in var_names})
 
-    # Close the file
     ds.close()
-
-    return output_file
-
 
 
 def remap_file(args):
@@ -388,36 +390,10 @@ def process_file(args):
                     log_file.write(f"Failed to download {blob_name} after {retries} attempts. Error: {e}\n")
 
     # Crop the file
-    output_file = crop_reproject((local_path, output_path, var_name,
-                                   lat_min, lat_max, lon_min, lon_max,
-                                   resolution, save_format, more_info,
-                                   file_pattern, classic_format))
-
-    # Remap the file
-    if remap is not None:
-        # Remap the file
-        remap_file((remap, output_file, output_path, met))
-
-    if more_info:
-        # Open output file
-        ds = xr.open_dataset(output_file, engine="netcdf4")
-
-        # Get timestamp
-        ds_stamp = datetime.strptime(ds.time_coverage_start, 
-                                          "%Y-%m-%dT%H:%M:%S.%fZ")
-        # Add variable julian_day as type short
-        ds["julian_day"] = ds_stamp.strftime("%j")
-        ds["julian_day"].attrs['comment'] = ds['julian_day'].values
-        # Add variable time_of_day is a Hour and Minute, save as char
-        ds["time_of_day"] = ds_stamp.strftime("%H%M")
-        ds["time_of_day"].attrs['comment'] = ds['time_of_day'].values
-        
-    # Save the file
-    if classic_format:
-        ds.to_netcdf(output_file, mode='w', format='NETCDF3_CLASSIC')
-    else:
-        ds.to_netcdf(output_file, mode='w')
-    ds.close()
+    crop_reproject((local_path, output_path, var_name,
+                    lat_min, lat_max, lon_min, lon_max,
+                    resolution, save_format, more_info,
+                    file_pattern, classic_format, remap, met))
 
     # Remove the local file
     pathlib.Path(local_path).unlink()
@@ -494,12 +470,11 @@ def main():
     parser.add_argument('--remap', type=str, default=None, help='Give a input file to remap the output')
     parser.add_argument('--method', type=str, default='remapnn', help='Remap method to use (e.g., remapnn)')
 
-
     # Other settings
     parser.add_argument('--parallel', type=lambda x: bool(strtobool(x)), default=True, help='Use parallel processing')
     parser.add_argument('--processes', type=int, default=4, help='Number of processes for parallel execution')
     parser.add_argument('--max_attempts', type=int, default=3, help='Number of attempts to download a file')
-    parser.add_argument('--info', type=lambda x: bool(strtobool(x)), default=True, help='Show information messages')
+    parser.add_argument('--info', type=lambda x: bool(strtobool(x)), default=False, help='Show information messages')
     parser.add_argument('--save_format', type=str, default='flat', choices=['flat', 'by_date','julian'],
                     help="Save the files in a flat structure or by date")
     parser.add_argument('--file_pattern', type=str, default=None, help='Pattern for the files')
@@ -611,7 +586,7 @@ def main():
             loading_bar.update(1)
         loading_bar.close()
 
-    # shutil.rmtree('tmp/')
+    shutil.rmtree('tmp/')
 
 if __name__ == '__main__':
     main()
