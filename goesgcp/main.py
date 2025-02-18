@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pyproj import CRS, Transformer
 from google.api_core.exceptions import GoogleAPIError
 import netCDF4
+import numpy as np
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -174,6 +175,8 @@ def crop_reproject(args):
             var_names = [var_name]
         scale_factors = [ds_s[var].attrs["scale_factor"] for var in var_names]
         add_offsets = [ds_s[var].attrs["add_offset"] for var in var_names]
+        fill_values = [ds_s[var].attrs["_FillValue"] for var in var_names]
+        units = [ds_s[var].attrs["units"] for var in var_names]
         sat_lat = ds_s["goes_imager_projection"].attrs["latitude_of_projection_origin"]
         sat_lon = ds_s["goes_imager_projection"].attrs["longitude_of_projection_origin"]
         ds_s.close()
@@ -233,7 +236,7 @@ def crop_reproject(args):
     if ds["y"].values[0] > ds["y"].values[-1]:
         ds = ds.sortby("y")
 
-    # Reproject the dataset in serial
+    # Reproject the dataset in serial and convert values to short
     ds = ds.rio.reproject("EPSG:4326", resolution=resolution)
 
     # Rename lat/lon coordinates
@@ -246,17 +249,22 @@ def crop_reproject(args):
             ds[var].attrs['comments'] = 'Cropped and reprojected to EPSG:4326 by goesgcp'
         # Crop using lat/lon coordinates
         ds = ds.rio.clip_box(minx=lon_min, miny=lat_min, maxx=lon_max, maxy=lat_max)
+    else:
+        # Add _FillValue to the variables
+        for var in var_names:
+            ds[var].attrs['_FillValue'] = float(fill_values[var_names.index(var)])
 
     # Add global metadata comments
     ds.attrs['comments'] = "Data processed by goesgcp, author: Helvecio B. L. Neto (helvecioblneto@gmail.com)"
-   
-    if save_format == 'by_date':
-        file_datetime = datetime.strptime(ds.time_coverage_start, 
+
+    # Get the file datetime
+    file_datetime = datetime.strptime(ds.time_coverage_start, 
                                           "%Y-%m-%dT%H:%M:%S.%fZ")
+    if save_format == 'by_date':
         year = file_datetime.strftime("%Y")
         month = file_datetime.strftime("%m")
         day = file_datetime.strftime("%d")
-        output_directory = f"{output}{year}/{month}/{day}/"
+        output_directory = f"{output}{year}/{month}/"
     elif save_format == 'julian':
         file_datetime = datetime.strptime(ds.time_coverage_start, 
                                           "%Y-%m-%dT%H:%M:%S.%fZ")
@@ -279,25 +287,11 @@ def crop_reproject(args):
     else:
         output_file = f"{output_directory}{file.split('/')[-1]}"
 
-    # Add extra information
-    if more_info:
-        ds["satlat"] = sat_lat.astype('float32')
-        ds["satlat"].attrs['comment'] = ds['satlat'].values
-        ds["satlon"] = sat_lon.astype('float32')
-        ds["satlon"].attrs['comment'] = ds['satlon'].values
-        ds_stamp = datetime.strptime(ds.time_coverage_start, 
-                                          "%Y-%m-%dT%H:%M:%S.%fZ")
-        ds["julian_day"] = ds_stamp.strftime("%j")
-        ds["julian_day"].attrs['comment'] = ds['julian_day'].values
-        ds["time_of_day"] = ds_stamp.strftime("%H%M")
-        ds["time_of_day"].attrs['comment'] = ds['time_of_day'].values
-        for var, scale_factor, add_offset in zip(var_names, scale_factors, add_offsets):
-            ds[var].attrs['scale-factor'] = scale_factor
-            ds[var].attrs['add-offset'] = add_offset
-
     # Write the file
     if classic_format:
-        ds.to_netcdf(output_file, mode='w', format='NETCDF3_CLASSIC', encoding={var: {'zlib': True} for var in var_names})
+        # Change the data type to round values to int16
+        ds.to_netcdf(output_file, mode='w', format='NETCDF3_CLASSIC', encoding={var: {'dtype': np.int16} for var in var_names
+        })
     else:
         ds.to_netcdf(output_file, mode='w', encoding={var: {'zlib': True} for var in var_names})
     ds.close()
@@ -306,30 +300,45 @@ def crop_reproject(args):
     if remap:
         remap_file((remap, output_file, output, method))
 
-    # if more_info:
-    #     ds_s = xr.open_dataset(output_file, engine="netcdf4", decode_cf=False)
-    #     scale_factors = [ds_s[var].attrs["scale_factor"] for var in var_names]
-    #     add_offsets = [ds_s[var].attrs["add_offset"] for var in var_names]
-    #     sat_lat = ds_s["goes_imager_projection"].attrs["latitude_of_projection_origin"]
-    #     sat_lon = ds_s["goes_imager_projection"].attrs["longitude_of_projection_origin"]
-    #     ds_s["satlat"] = sat_lat.astype('float32')
-    #     ds_s["satlat"].attrs['comment'] = ds_s['satlat'].values
-    #     ds_s["satlon"] = sat_lon.astype('float32')
-    #     ds_s["satlon"].attrs['comment'] = ds_s['satlon'].values
-    #     ds_stamp = datetime.strptime(ds.time_coverage_start, 
-    #                                       "%Y-%m-%dT%H:%M:%S.%fZ")
-    #     ds_s["julian_day"] = ds_stamp.strftime("%j")
-    #     ds_s["julian_day"].attrs['comment'] = ds_s['julian_day'].values
-    #     ds_s["time_of_day"] = ds_stamp.strftime("%H%M")
-    #     ds_s["time_of_day"].attrs['comment'] = ds_s['time_of_day'].values
-    #     for var, scale_factor, add_offset in zip(var_names, scale_factors, add_offsets):
-    #         ds_s[var].attrs['scale-factor'] = scale_factor
-    #         ds_s[var].attrs['add-offset'] = add_offset
-    #     # Save the file
-    #     if classic_format:
-    #         ds_s.to_netcdf(output_file, mode='w', format='NETCDF3_CLASSIC', encoding={var: {'zlib': True} for var in var_names})
-    #     else:
-    #         ds_s.to_netcdf(output_file, mode='w', encoding={var: {'zlib': True} for var in var_names})
+    if more_info:
+        with netCDF4.Dataset(output_file, 'r+') as ds:
+            # Clear old attributes
+            for var_name in var_names:
+                var = ds.variables[var_name]
+                for attr in var.ncattrs():
+                    if attr == 'long_name' or attr == '_FillValue':
+                        continue
+                    var.delncattr(attr)
+            # Add new attributes
+            for var in range(len(var_names)):
+                ds[var_names[var]].setncattr('scale_factor', scale_factors[var])
+                ds[var_names[var]].setncattr('add_offset', add_offsets[var])
+                ds[var_names[var]].setncattr('missing_value', fill_values[var])
+                ds[var_names[var]].setncattr('units', np.float32(units[var]))
+            # Add variable satlat
+            ds.createDimension('satlat', 1)
+            ds.createVariable('satlat', 'f4', ('satlat',))
+            ds.variables['satlat'][:] = sat_lat
+            ds.variables['satlat'].long_name = 'Satellite Latitude'
+            ds.variables['satlat'].units = 'degrees_north'
+            ds.createDimension('satlon', 1)
+            ds.createVariable('satlon', 'f4', ('satlon',))
+            ds.variables['satlon'][:] = sat_lon
+            ds.variables['satlon'].long_name = 'Satellite Longitude'
+            ds.variables['satlon'].units = 'degrees_east'
+            ds.createDimension('julian_day', 1)
+            ds.createVariable('julian_day', 'i2', ('julian_day',))
+            ds.variables['julian_day'][:] = int(file_datetime.timetuple().tm_yday)
+            ds.variables['julian_day'].long_name = 'Julian day'
+            ds.variables['julian_day'].units = 'day'
+            time_of_day_char = netCDF4.stringtochar(np.array([str(file_datetime.strftime("%H%M"))], 'S4'))
+             # Add variable time_of_day
+            ds.createDimension('time_of_day', 4)
+            ds.createVariable('time_of_day', 'S1', ('time_of_day',))
+            ds.variables['time_of_day'][:] = time_of_day_char
+            ds.variables['time_of_day'].long_name = 'Time of day'
+            ds.variables['time_of_day'].units = 'hour and minute'
+            ds.variables['time_of_day'].comment = str(file_datetime.strftime("%H%M"))
 
 
 def remap_file(args):
@@ -375,36 +384,34 @@ def process_file(args):
     bucket_name, blob_name, local_path, output_path, var_name, lat_min, lat_max, lon_min, lon_max, resolution, \
     save_format, retries, remap, met, more_info, file_pattern, classic_format = args
 
-    # # Download the file
-    # attempt = 0
-    # while attempt < retries:
-    #     try:
-    #         # Connect to the bucket
-    #         bucket = storage_client.bucket(bucket_name)
-    #         blob = bucket.blob(blob_name)
-    #         blob.download_to_filename(local_path, timeout=120)
-    #         break  # Exit the loop if the download is successful
-    #     except (GoogleAPIError, Exception) as e:  # Catch any exception
-    #         attempt += 1
-    #         if attempt < retries:
-    #             time.sleep(2 ** attempt)  # Backoff exponencial
-    #         else:
-    #             with open('fail.log', 'a') as log_file:
-    #                 log_file.write(f"Failed to download {blob_name} after {retries} attempts. Error: {e}\n")
-
+    # Download the file
+    attempt = 0
+    while attempt < retries:
+        try:
+            # Connect to the bucket
+            bucket = storage_client.bucket(bucket_name)
+            blob = bucket.blob(blob_name)
+            blob.download_to_filename(local_path, timeout=120)
+            break  # Exit the loop if the download is successful
+        except (GoogleAPIError, Exception) as e:  # Catch any exception
+            attempt += 1
+            if attempt < retries:
+                time.sleep(2 ** attempt)  # Backoff exponencial
+            else:
+                with open('fail.log', 'a') as log_file:
+                    log_file.write(f"Failed to download {blob_name} after {retries} attempts. Error: {e}\n")
     # Crop the file
-    # try:
-    crop_reproject((local_path, output_path,
-                    var_name, lat_min, lat_max, lon_min, lon_max,
-                    resolution, save_format, 
-                    more_info, file_pattern, classic_format, remap, met))
-    # except Exception as e:
-    #     with open('fail.log', 'a') as log_file:
-    #         log_file.write(f"Failed to process {blob_name}. Error: {e}\n")
-    #     pass
-
-    # # Remove the local file
-    # pathlib.Path(local_path).unlink()
+    try:
+        crop_reproject((local_path, output_path,
+                        var_name, lat_min, lat_max, lon_min, lon_max,
+                        resolution, save_format, 
+                        more_info, file_pattern, classic_format, remap, met))
+        # Remove the local file
+        pathlib.Path(local_path).unlink()
+    except Exception as e:
+        with open('fail.log', 'a') as log_file:
+            log_file.write(f"Failed to process {blob_name}. Error: {e}\n")
+        pass
 
 # Create connection
 storage_client = storage.Client.create_anonymous_client()
@@ -595,7 +602,7 @@ def main():
         loading_bar.close()
 
     # Clean up the temporary directory
-    # shutil.rmtree('tmp/')
+    shutil.rmtree('tmp/')
 
 if __name__ == '__main__':
     main()
