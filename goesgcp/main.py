@@ -423,8 +423,8 @@ def process_file(args):
                         var_name, lat_min, lat_max, lon_min, lon_max,
                         resolution, save_format, 
                         more_info, file_pattern, classic_format, remap, met))
-            #Remove the local file
-            pathlib.Path(local_path).unlink()
+        #Remove the local file
+        pathlib.Path(local_path).unlink()
     except Exception as e:
         with open('fail.log', 'a') as log_file:
             log_file.write(f"Failed to process {blob_name}. Error: {e}\n")
@@ -618,8 +618,8 @@ def main():
             loading_bar.update(1)
         loading_bar.close()
 
-    # # Clean up the temporary directory
-    # shutil.rmtree('tmp/')
+    # Clean up the temporary directory
+    shutil.rmtree('tmp/')
 
 if __name__ == '__main__':
     main()
