@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 from pyproj import CRS, Transformer
 from google.api_core.exceptions import GoogleAPIError
 import netCDF4
+import pyproj
 import numpy as np
 import warnings
 warnings.filterwarnings('ignore')
@@ -179,6 +180,7 @@ def crop_reproject(args):
         units = [ds_s[var].attrs["units"] for var in var_names]
         sat_lat = ds_s["goes_imager_projection"].attrs["latitude_of_projection_origin"]
         sat_lon = ds_s["goes_imager_projection"].attrs["longitude_of_projection_origin"]
+        long_names = [ds_s[var].attrs["long_name"] for var in var_names]
         ds_s.close()
 
     # Open the file
@@ -193,6 +195,10 @@ def crop_reproject(args):
 
     # Select only var_name and goes_imager_projection
     ds = ds[var_names + ["goes_imager_projection"]]
+
+    # Get the file datetime
+    file_datetime = datetime.strptime(ds.time_coverage_start, 
+                                          "%Y-%m-%dT%H:%M:%S.%fZ")
 
     # Get projection
     sat_height = ds["goes_imager_projection"].attrs["perspective_point_height"]
@@ -241,6 +247,23 @@ def crop_reproject(args):
 
     # Rename lat/lon coordinates
     ds = ds.rename({"x": "lon", "y": "lat"})
+    ds = ds.rename({"goes_imager_projection": "crs"})
+    # ds = ds.rename({"t": "time_bounds"})
+    ds = ds.drop(["x_image", "y_image", "t"])
+
+    # Remove any band_id from the variable names, encoding, and attributes
+    for var in var_names:
+        if "band_id" in ds[var].attrs:
+            ds[var].attrs.pop("band_id")
+        if "band_id" in ds[var].encoding:
+            ds[var].encoding.pop("band_id")
+        if "coordinates" in ds[var].attrs:
+            ds[var].attrs.pop("coordinates")
+        if "coordinates" in ds[var].encoding:
+            ds[var].encoding.pop("coordinates")
+        if "grid_mapping" in ds[var].attrs:
+            ds[var].attrs.pop("grid_mapping")
+        
 
     # Check if remap is not a string
     if type(remap) != str:
@@ -249,25 +272,28 @@ def crop_reproject(args):
             ds[var].attrs['comments'] = 'Cropped and reprojected to EPSG:4326 by goesgcp'
         # Crop using lat/lon coordinates
         ds = ds.rio.clip_box(minx=lon_min, miny=lat_min, maxx=lon_max, maxy=lat_max)
-    else:
-        # Add _FillValue to the variables
+    elif type(remap) == str and more_info:
+        # Round the values to short
         for var in var_names:
-            ds[var].attrs['_FillValue'] = float(fill_values[var_names.index(var)])
+            # Apply scale and offset and round the values to int16
+            data = ds[var].values / scale_factors[var_names.index(var)] - add_offsets[var_names.index(var)]
+            data = np.round(data).astype(np.int16)
+            ds[var].values = data
+            ds[var].attrs = {}
+        
+        for var in var_names:
+            ds[var].attrs['_FillValue'] = fill_values[var_names.index(var)]
+            ds[var].encoding['_FillValue'] = fill_values[var_names.index(var)]
 
     # Add global metadata comments
     ds.attrs['comments'] = "Data processed by goesgcp, author: Helvecio B. L. Neto (helvecioblneto@gmail.com)"
 
-    # Get the file datetime
-    file_datetime = datetime.strptime(ds.time_coverage_start, 
-                                          "%Y-%m-%dT%H:%M:%S.%fZ")
     if save_format == 'by_date':
         year = file_datetime.strftime("%Y")
         month = file_datetime.strftime("%m")
         day = file_datetime.strftime("%d")
         output_directory = f"{output}{year}/{month}/"
     elif save_format == 'julian':
-        file_datetime = datetime.strptime(ds.time_coverage_start, 
-                                          "%Y-%m-%dT%H:%M:%S.%fZ")
         year = file_datetime.strftime("%Y")
         julian_day = file_datetime.timetuple().tm_yday
         output_directory = f"{output}{year}/{julian_day}/"
@@ -279,38 +305,29 @@ def crop_reproject(args):
 
     # Apply file pattern
     if file_pattern is not None:
-        # Get the timestamp
-        file_datetime = datetime.strptime(ds.time_coverage_start, 
-                                          "%Y-%m-%dT%H:%M:%S.%fZ")
         file_pattern = file_datetime.strftime(file_pattern)
         output_file = f"{output_directory}{file_pattern}.nc"
     else:
         output_file = f"{output_directory}{file.split('/')[-1]}"
 
     # Write the file
-    if classic_format:
+    if classic_format and more_info:
         # Change the data type to round values to int16
-        ds.to_netcdf(output_file, mode='w', format='NETCDF3_CLASSIC', encoding={var: {'dtype': np.int16} for var in var_names
-        })
+        ds.to_netcdf(output_file, mode='w', format='NETCDF3_CLASSIC', encoding={var: {'dtype': 'int16'} for var in var_names})
     else:
-        ds.to_netcdf(output_file, mode='w', encoding={var: {'zlib': True} for var in var_names})
+        ds.to_netcdf(output_file, mode='w', format='NETCDF4')
     ds.close()
 
-    # Remap the file
+    # # Remap the file
     if remap:
+        # Remap the file
         remap_file((remap, output_file, output, method))
 
     if more_info:
         with netCDF4.Dataset(output_file, 'r+') as ds:
-            # Clear old attributes
-            for var_name in var_names:
-                var = ds.variables[var_name]
-                for attr in var.ncattrs():
-                    if attr == 'long_name' or attr == '_FillValue':
-                        continue
-                    var.delncattr(attr)
             # Add new attributes
             for var in range(len(var_names)):
+                ds[var_names[var]].setncattr('long_name', long_names[var])
                 ds[var_names[var]].setncattr('scale_factor', scale_factors[var])
                 ds[var_names[var]].setncattr('add_offset', add_offsets[var])
                 ds[var_names[var]].setncattr('missing_value', fill_values[var])
@@ -384,7 +401,7 @@ def process_file(args):
     bucket_name, blob_name, local_path, output_path, var_name, lat_min, lat_max, lon_min, lon_max, resolution, \
     save_format, retries, remap, met, more_info, file_pattern, classic_format = args
 
-    # Download the file
+    #Download the file
     attempt = 0
     while attempt < retries:
         try:
@@ -406,14 +423,14 @@ def process_file(args):
                         var_name, lat_min, lat_max, lon_min, lon_max,
                         resolution, save_format, 
                         more_info, file_pattern, classic_format, remap, met))
-        # Remove the local file
-        pathlib.Path(local_path).unlink()
+            #Remove the local file
+            pathlib.Path(local_path).unlink()
     except Exception as e:
         with open('fail.log', 'a') as log_file:
             log_file.write(f"Failed to process {blob_name}. Error: {e}\n")
         pass
 
-# Create connection
+#Create connection
 storage_client = storage.Client.create_anonymous_client()
 
 def main():
@@ -601,8 +618,8 @@ def main():
             loading_bar.update(1)
         loading_bar.close()
 
-    # Clean up the temporary directory
-    shutil.rmtree('tmp/')
+    # # Clean up the temporary directory
+    # shutil.rmtree('tmp/')
 
 if __name__ == '__main__':
     main()
