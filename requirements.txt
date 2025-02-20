@@ -3,3 +3,4 @@ pyproj
 xarray
 netcdf4
 rioxarray
+tqdm
