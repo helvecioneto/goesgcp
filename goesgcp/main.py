@@ -157,6 +157,10 @@ def get_recent_files(connection, bucket_name, base_prefix, pattern, min_files):
     # Return only the names of the most recent files, according to the minimum requested
     return [file[0] for file in files[:min_files]]
 
+from osgeo import gdal, osr
+
+gdal.PushErrorHandler('CPLQuietErrorHandler')
+
 
 def crop_reproject(args):
     """
@@ -166,84 +170,162 @@ def crop_reproject(args):
     file, output, var_name, lat_min, lat_max, lon_min, lon_max, resolution, save_format, \
     more_info, file_pattern, classic_format, remap, method = args
 
-    if more_info:
-        # Open file using netCDF4
-        ds_s = xr.open_dataset(file, engine="netcdf4", decode_cf=False)
-        if var_name is None:
-            var_names = [var for var in ds_s.data_vars if len(ds_s[var].dims) == 2]
-            var_names = [var for var in var_names if 'DQF' not in var]
-        else:
-            var_names = [var_name]
-        scale_factors = [ds_s[var].attrs["scale_factor"] for var in var_names]
-        add_offsets = [ds_s[var].attrs["add_offset"] for var in var_names]
-        fill_values = [ds_s[var].attrs["_FillValue"] for var in var_names]
-        units = [ds_s[var].attrs["units"] for var in var_names]
-        sat_lat = ds_s["goes_imager_projection"].attrs["latitude_of_projection_origin"]
-        sat_lon = ds_s["goes_imager_projection"].attrs["longitude_of_projection_origin"]
-        long_names = [ds_s[var].attrs["long_name"] for var in var_names]
-        ds_s.close()
+    # Read file using gdal
+    img = gdal.Open(f"NETCDF:{file}:"+var_name)
 
-    # Open the file
-    ds = xr.open_dataset(file, engine="netcdf4")
+    # Get source projection
+    source_prj = osr.SpatialReference()
+    source_prj.ImportFromProj4(img.GetProjectionRef())
 
-    if var_name is None:
-        # Get all variables are 2D
-        var_names = [var for var in ds.data_vars if len(ds[var].dims) == 2]
-        var_names = [var for var in var_names if 'DQF' not in var]
+    # Set target projection
+    target_prj = osr.SpatialReference()
+    target_prj.ImportFromProj4("+proj=longlat +ellps=WGS84 +datum=WGS84 +no_defs")
+
+    # Define the parameters of the output file
+    kwargs = {
+        'format': 'netCDF',
+        'srcSRS': source_prj.ExportToWkt(),  # Converte para WKT
+        'dstSRS': target_prj.ExportToWkt(),  # Converte para WKT
+        'outputBounds': (lon_min, lat_min, lon_max, lat_max),
+        'xRes': resolution,
+        'yRes': resolution,
+        'resampleAlg': gdal.GRA_NearestNeighbour
+    }
+
+    # Get name of file without extension
+    file_name = file.split('/')[-1].split('.')[0]
+    file_datetime = datetime.strptime(file_name[27:40], '%Y%j%H%M%S')
+    
+    # Set output file based on save_format
+    if save_format == 'by_date':
+        year = file_datetime.strftime("%Y")
+        month = file_datetime.strftime("%m")
+        day = file_datetime.strftime("%d")
+        output_directory = f"{output}{year}/{month}/"
+    elif save_format == 'julian':
+        year = file_datetime.strftime("%Y")
+        julian_day = file_datetime.timetuple().tm_yday
+        output_directory = f"{output}{year}/{julian_day}/"
     else:
-        var_names = [var_name]
+        output_directory = output
 
-    # Select only var_name and goes_imager_projection
-    ds = ds[var_names + ["goes_imager_projection"]]
+    # Set output file name based on file_pattern
+    if file_pattern is not None:
+        file_name = f"{file_datetime.strftime(file_pattern)}.nc"
 
-    # Get the file datetime
-    file_datetime = datetime.strptime(ds.time_coverage_start, 
-                                          "%Y-%m-%dT%H:%M:%S.%fZ")
+    # Create the output directory
+    pathlib.Path(output_directory).mkdir(parents=True, exist_ok=True)
+
+
+    # Verify if remap is not a string
+    if type(remap) != str:
+        gdal.Warp(f"{output_directory}{file_name}", img, **kwargs)
+    else:
+        # Reproject the file and save as temporary file 1
+        gdal.Warp(f"tmp/{file_name}_tmp1.nc", img, **kwargs)
+        remap_file((remap, f"tmp/{file_name}_tmp1.nc",
+                     f"{output_directory}{file_name}", method))
+        # Delete temporary file
+        pathlib.Path(f"tmp/{file_name}_tmp1.nc").unlink()
+
+
+
+
+
+    # if more_info:
+    #     # Open file using netCDF4
+    #     ds_s = xr.open_dataset(file, engine="netcdf4", decode_cf=False)
+    #     if var_name is None:
+    #         var_names = [var for var in ds_s.data_vars if len(ds_s[var].dims) == 2]
+    #         var_names = [var for var in var_names if 'DQF' not in var]
+    #     else:
+    #         var_names = [var_name]
+    #     scale_factors = [ds_s[var].attrs["scale_factor"] for var in var_names]
+    #     add_offsets = [ds_s[var].attrs["add_offset"] for var in var_names]
+    #     fill_values = [ds_s[var].attrs["_FillValue"] for var in var_names]
+    #     units = [ds_s[var].attrs["units"] for var in var_names]
+    #     sat_lat = ds_s["goes_imager_projection"].attrs["latitude_of_projection_origin"]
+    #     sat_lon = ds_s["goes_imager_projection"].attrs["longitude_of_projection_origin"]
+    #     long_names = [ds_s[var].attrs["long_name"] for var in var_names]
+    #     ds_s.close()
+
+    # # Open the file
+    # ds = xr.open_dataset(file, engine="netcdf4")
+
+    # if var_name is None:
+    #     # Get all variables are 2D
+    #     var_names = [var for var in ds.data_vars if len(ds[var].dims) == 2]
+    #     var_names = [var for var in var_names if 'DQF' not in var]
+    # else:
+    #     var_names = [var_name]
+
+    # # Select only var_name and goes_imager_projection
+    # ds = ds[var_names + ["goes_imager_projection","geospatial_lat_lon_extent"]]
+
+    # # Get src projection
+    # src_proj = pyproj.Proj(ds["goes_imager_projection"].attrs)
+    # print(src_proj)
+
+    
 
     # Get projection
-    sat_height = ds["goes_imager_projection"].attrs["perspective_point_height"]
-    ds = ds.assign_coords({
-                "x": ds["x"].values * sat_height,
-                "y": ds["y"].values * sat_height,
-            })
-    # Set CRS from goes_imager_projection
-    crs = CRS.from_cf(ds["goes_imager_projection"].attrs)
-    ds = ds.rio.write_crs(crs)
+    # perspective_point_height = ds["goes_imager_projection"].attrs["perspective_point_height"]
 
-    # Create a transformer
-    transformer = Transformer.from_crs(CRS.from_epsg(4326), crs)
+    # # Set the coordinates
+    # ds = ds.assign_coords({
+    #             "x": ds["x"].values * perspective_point_height,
+    #             "y": ds["y"].values * perspective_point_height,
+    #         })
+
+    # Set CRS from goes_imager_projection
+    # crs = CRS.from_cf(ds["goes_imager_projection"].attrs)
+    # ds = ds.rio.write_crs(crs)
+
+    # # Reproject the dataset to EPSG:4326
+    # ds = ds.rio.reproject("EPSG:4326")
+    # ds = ds.rename({"x": "lon", "y": "lat"})
+    # ds = ds.rename({"goes_imager_projection": "crs"}) 
+    # ds = ds.drop(["x_image", "y_image", "t"])
+
+    # ds.to_netcdf('teste.nc', mode='w', format='NETCDF4')
+    # ds.close()
+
+    # print(ds)
+
+    # # Get geospatial_lat_lon_extent from ds
+    # geo_lon_min = ds['geospatial_lat_lon_extent'].geospatial_westbound_longitude
+    # geo_lon_max = ds['geospatial_lat_lon_extent'].geospatial_eastbound_longitude
+    # geo_lat_min = ds['geospatial_lat_lon_extent'].geospatial_southbound_latitude
+    # geo_lat_max = ds['geospatial_lat_lon_extent'].geospatial_northbound_latitude
+
+    # # Create a transformer
+    # transformer = Transformer.from_crs(CRS.from_epsg(4326), crs, always_xy=True)
+
+    # min_x, min_y = transformer.transform(geo_lon_min, geo_lat_min)
+    # max_x, max_y = transformer.transform(geo_lon_max, geo_lat_max)
+
+    # # Crop the dataset based on the bounding box
+    # ds = ds.sel(x=slice(min_x, max_x), y=slice(max_y, min_y))
+
+    # print('\n')
+    # print('geo_lat_min:',geo_lat_min, 'geo_lat_max:', geo_lat_max, 'geo_lon_min:', geo_lon_min, 'geo_lon_max:', geo_lon_max)
+    # print('min_x:',min_x, 'min_y:', min_y, 'max_x:', max_x, 'max_y:', max_y)
+
+
+    # print(ds)
     # Calculate the margin
     margin_ratio = 0.40  # 40% margin
 
-    # Get the bounding box
-    min_x, min_y = transformer.transform(lat_min, lon_min)
-    max_x, max_y = transformer.transform(lat_max, lon_max)
-
-    # Calculate the range
-    x_range = abs(max_x - min_x)
-    y_range = abs(max_y - min_y)
-
-    margin_x = x_range * margin_ratio
-    margin_y = y_range * margin_ratio
-
-    # Expand the bounding box
-    min_x -= margin_x
-    max_x += margin_x
-    min_y -= margin_y
-    max_y += margin_y
-
-    # Sort the values
-    y_min, y_max = sorted([min_y, max_y], reverse=ds["y"].values[0] > ds["y"].values[-1])
 
     # Crop the dataset based on the bounding box
-    ds = ds.sel(x=slice(min_x, max_x), y=slice(y_min, y_max))
+    # ds = ds.sel(x=slice(min_x, max_x), y=slice(max_y, min_y))
 
-    # Sort the values
-    if ds["y"].values[0] > ds["y"].values[-1]:
-        ds = ds.sortby("y")
+    # print(ds)
+
+    exit()
 
     # Reproject the dataset in serial and convert values to short
-    ds = ds.rio.reproject("EPSG:4326", resolution=resolution)
+    ds = ds.rio.reproject("EPSG:4326", resolution=resolution, resampling=1)
 
     # Rename lat/lon coordinates
     ds = ds.rename({"x": "lon", "y": "lat"})
@@ -264,7 +346,6 @@ def crop_reproject(args):
         if "grid_mapping" in ds[var].attrs:
             ds[var].attrs.pop("grid_mapping")
         
-
     # Check if remap is not a string
     if type(remap) != str:
         for var in var_names:
@@ -361,19 +442,8 @@ def crop_reproject(args):
 def remap_file(args):
     """ Remap the download file based on the input file. """
 
-    base_file, target_file, output, method = args
+    base_file, target_file, output_file, method = args
 
-    # Get output directory based on target_file
-    output_file = f"{output}{target_file.split('/')[-1]}"
-    output_directory = output_file.replace(target_file.split('/')[-1], "")
-
-    # Create the output directory
-    pathlib.Path(output_directory).mkdir(parents=True, exist_ok=True)
-
-    output_file = f"{output_directory}{target_file.split('/')[-1]}"
-
-    # Add _ into output_file to prevent overwrite
-    output_file = output_file.replace(".nc", "_remap.nc")
 
     # Run the cdo command
     cdo_command = [
@@ -386,11 +456,11 @@ def remap_file(args):
         print(f"Error remapping file {target_file}: {e}")
         pass
 
-    # Delete the target file
-    pathlib.Path(target_file).unlink()
+    # # Delete the target file
+    # pathlib.Path(target_file).unlink()
 
-    # Rename the output file
-    pathlib.Path(output_file).rename(target_file)
+    # # Rename the output file
+    # pathlib.Path(output_file).rename(target_file)
 
 
 def process_file(args):
@@ -401,34 +471,34 @@ def process_file(args):
     bucket_name, blob_name, local_path, output_path, var_name, lat_min, lat_max, lon_min, lon_max, resolution, \
     save_format, retries, remap, met, more_info, file_pattern, classic_format = args
 
-    #Download the file
-    attempt = 0
-    while attempt < retries:
-        try:
-            # Connect to the bucket
-            bucket = storage_client.bucket(bucket_name)
-            blob = bucket.blob(blob_name)
-            blob.download_to_filename(local_path, timeout=120)
-            break  # Exit the loop if the download is successful
-        except (GoogleAPIError, Exception) as e:  # Catch any exception
-            attempt += 1
-            if attempt < retries:
-                time.sleep(2 ** attempt)  # Backoff exponencial
-            else:
-                with open('fail.log', 'a') as log_file:
-                    log_file.write(f"Failed to download {blob_name} after {retries} attempts. Error: {e}\n")
-    # Crop the file
-    try:
-        crop_reproject((local_path, output_path,
-                        var_name, lat_min, lat_max, lon_min, lon_max,
-                        resolution, save_format, 
-                        more_info, file_pattern, classic_format, remap, met))
-        #Remove the local file
-        pathlib.Path(local_path).unlink()
-    except Exception as e:
-        with open('fail.log', 'a') as log_file:
-            log_file.write(f"Failed to process {blob_name}. Error: {e}\n")
-        pass
+    # # #Download the file
+    # attempt = 0
+    # while attempt < retries:
+    #     try:
+    #         # Connect to the bucket
+    #         bucket = storage_client.bucket(bucket_name)
+    #         blob = bucket.blob(blob_name)
+    #         blob.download_to_filename(local_path, timeout=120)
+    #         break  # Exit the loop if the download is successful
+    #     except (GoogleAPIError, Exception) as e:  # Catch any exception
+    #         attempt += 1
+    #         if attempt < retries:
+    #             time.sleep(2 ** attempt)  # Backoff exponencial
+    #         else:
+    #             with open('fail.log', 'a') as log_file:
+    #                 log_file.write(f"Failed to download {blob_name} after {retries} attempts. Error: {e}\n")
+    # # Crop the file
+    # try:
+    crop_reproject((local_path, output_path,
+                    var_name, lat_min, lat_max, lon_min, lon_max,
+                    resolution, save_format, 
+                    more_info, file_pattern, classic_format, remap, met))
+    #Remove the local file
+    # pathlib.Path(local_path).unlink()
+    # except Exception as e:
+    #     with open('fail.log', 'a') as log_file:
+    #         log_file.write(f"Failed to process {blob_name}. Error: {e}\n")
+    #     pass
 
 #Create connection
 storage_client = storage.Client.create_anonymous_client()
@@ -476,8 +546,8 @@ def main():
     # Satellite and product settings
     parser.add_argument('--satellite', type=str, default='goes-16', choices=['goes-16', 'goes-18'], help='Name of the satellite (e.g., goes16)')
     parser.add_argument('--product', type=str, default='ABI-L2-CMIPF', help='Name of the satellite product', choices=product_names)
-    parser.add_argument('--var_name', type=str, default=None, help='Variable name to extract (e.g., CMI)')
-    parser.add_argument('--channel', type=int, default=13, help='Channel to use (e.g., 13)')
+    parser.add_argument('--var_name', type=str, default='CMI', help='Variable name to extract (e.g., CMI)')
+    parser.add_argument('--channel', type=int, default=2, help='Channel to use (e.g., 13)')
     parser.add_argument('--op_mode', type=str, default='M6', help='Operational mode to use (e.g., M6C)')
 
     # Recent files settings
@@ -491,10 +561,10 @@ def main():
     parser.add_argument('--bt_min', nargs=2, type=int, default=[0, 60], help='Filter data between these minutes (e.g., 0 60)')
 
     # Geographic bounding box
-    parser.add_argument('--lat_min', type=float, default=-81.3282, help='Minimum latitude of the bounding box')
-    parser.add_argument('--lat_max', type=float, default=81.3282, help='Maximum latitude of the bounding box')
-    parser.add_argument('--lon_min', type=float, default=-156.2995, help='Minimum longitude of the bounding box')
-    parser.add_argument('--lon_max', type=float, default=6.2995, help='Maximum longitude of the bounding box')
+    parser.add_argument('--lat_min', type=float, default=-35, help='Minimum latitude of the bounding box')
+    parser.add_argument('--lat_max', type=float, default=8, help='Maximum latitude of the bounding box')
+    parser.add_argument('--lon_min', type=float, default=-74, help='Minimum longitude of the bounding box')
+    parser.add_argument('--lon_max', type=float, default=-30, help='Maximum longitude of the bounding box')
     parser.add_argument('--resolution', type=float, default=0.01, help='Resolution of the output file')
     parser.add_argument('--output', type=str, default='./output/', help='Path for saving output files')
 
@@ -619,7 +689,7 @@ def main():
         loading_bar.close()
 
     # Clean up the temporary directory
-    shutil.rmtree('tmp/')
+    # shutil.rmtree('tmp/')
 
 if __name__ == '__main__':
     main()
