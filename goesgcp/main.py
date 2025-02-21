@@ -11,7 +11,7 @@ from multiprocessing import Pool
 from google.cloud import storage
 from google.api_core.exceptions import GoogleAPIError
 from datetime import datetime, timedelta, timezone
-import netCDF4
+import xarray as xr
 import numpy as np
 from osgeo import gdal, osr
 import warnings
@@ -25,9 +25,7 @@ def list_blobs(connection, bucket_name, prefix):
     Returns a list of blobs with their metadata.
     """
     bucket = connection.bucket(bucket_name)
-
     blobs = bucket.list_blobs(prefix=prefix)
-
     return blobs
 
 def get_directory_prefix(year, julian_day, hour):
@@ -50,69 +48,53 @@ def get_files_period(connection, bucket_name, base_prefix, pattern,
     """
 
     print(f"GOESGCP: Fetching files between {start} and {end}...")
-
     # Ensure datetime objects
     start = pd.to_datetime(start).tz_localize('UTC')
     end = pd.to_datetime(end).tz_localize('UTC')
-
     # Initialize list to store file metadata
     files_metadata = []
-
     # Generate the list of dates from start to end
     temp = start
     while temp <= end:
         year = temp.year
         julian_day = str(temp.timetuple().tm_yday).zfill(3)  # Julian day
         hour = temp.hour
-
         # Generate the directory prefix
         prefix = f"{base_prefix}/{get_directory_prefix(year, julian_day, hour)}"
-
         # List blobs in the bucket for the current prefix
         blobs = list_blobs(connection, bucket_name, prefix)
-
         # Filter blobs by pattern
         for blob in blobs:
             if pattern in blob.name:
                 files_metadata.append({
                     'file_name': blob.name,
                 })
-
         # Move to the next hour
         temp += timedelta(hours=1)
-
     # Create a DataFrame from the list of files
     df = pd.DataFrame(files_metadata)
-
     if df.empty:
         print("No files found matching the pattern and time range.")
         print(prefix)
         sys.exit(1)
-    
     # Transform file_name to datetime
     df['last_modified'] = pd.to_datetime(df['file_name'].str.extract(r'(\d{4}\d{3}\d{2}\d{2})').squeeze(), format='%Y%j%H%M')
-
-    # Ensure 'last_modified' is in the correct datetime format without timezone
+    # Ensure last_modified' is in the correct datetime format without timezone
     df['last_modified'] = pd.to_datetime(df['last_modified']).dt.tz_localize('UTC')
-
     # Filter the DataFrame based on the date range (inclusive)
     df = df[(df['last_modified'] >= start) & (df['last_modified'] <= end)]
-
     # Filter the DataFrame based on the hour range
     if len(bt_hour) > 1:
         df['hour'] = df['last_modified'].dt.hour
         df = df[(df['hour'] >= bt_hour[0]) & (df['hour'] <= bt_hour[1])]
-
     # Filter the DataFrame based on the minute range
     if len(bt_min) > 1:
         df['minute'] = df['last_modified'].dt.minute
         df = df[(df['minute'] >= bt_min[0]) & (df['minute'] <= bt_min[1])]
-
     # Filter the DataFrame based on the frequency
     if freq is not None:
         df['freq'] = df['last_modified'].dt.floor(freq)
         df = df.groupby('freq').first().reset_index()
-
     return df['file_name'].tolist()
 
 def get_recent_files(connection, bucket_name, base_prefix, pattern, min_files):
@@ -127,7 +109,6 @@ def get_recent_files(connection, bucket_name, base_prefix, pattern, min_files):
     """
     files = []
     current_time = datetime.now(timezone.utc)
-
     # Loop until the minimum number of files is found
     while len(files) < min_files:
         year = current_time.year
@@ -135,27 +116,20 @@ def get_recent_files(connection, bucket_name, base_prefix, pattern, min_files):
         # Add 3 digits to the Julian day
         julian_day = str(julian_day).zfill(3)
         hour = current_time.hour
-
         # Generate the directory prefix for the current date and time
         prefix = f"{base_prefix}/{get_directory_prefix(year, julian_day, hour)}"
-
         # List blobs from the bucket
         blobs = list_blobs(connection, bucket_name, prefix)
-
         # Filter blobs based on the pattern
         for blob in blobs:
             if pattern in blob.name:
                 files.append((blob.name, blob.updated))
-
         # Go back one hour
         current_time -= timedelta(hours=1)
-
     # Sort files by modification date in descending order
     files.sort(key=lambda x: x[1], reverse=True)
-
     # Return only the names of the most recent files, according to the minimum requested
     return [file[0] for file in files[:min_files]]
-
 
 
 def crop_reproject(args):
@@ -164,12 +138,10 @@ def crop_reproject(args):
     """
 
     file, output, var_name, lat_min, lat_max, lon_min, lon_max, resolution, save_format, \
-    more_info, file_pattern, classic_format, remap, method = args
+    more_info, file_pattern, classic_format, base_remap, method = args
 
     # Read file using gdal
     src_ds = gdal.Open(f"NETCDF:{file}:"+var_name)
-
-    # Read the header metadata
     metadata = src_ds.GetMetadata()
     scale_factor = metadata.get(var_name + '#scale_factor')
     add_offset = metadata.get(var_name + '#add_offset')
@@ -233,59 +205,31 @@ def crop_reproject(args):
         'yRes': resolution,
         'resampleAlg': resample_alg,
         'outputType': gdal.GDT_Int16,
+        'srcNodata': fill_value,
         'dstNodata': fill_value,
     }
-
-    # Verify if remap is not a string
-    if type(remap) != str:
-        gdal.Warp(f"{output_directory}{file_name}", img, **kwargs)
-        img = None, None
+    # Output_file depends on more_info
+    if more_info:
+        output_file = f"tmp/{file_name}_tmp1.nc"
     else:
-        # Reproject the file and save as temporary file 1
-        gdal.Warp(f"tmp/{file_name}_tmp1.nc", src_ds, **kwargs)
-        img = None       
-        # Remap
-        remap_file((remap, f"tmp/{file_name}_tmp1.nc",
-                     f"{output_directory}{file_name}", method))
-        return
+        output_file = f"{output_directory}{file_name}"
 
-    # Add metadata to the file using netCDF4 import Dataset
-    with netCDF4.Dataset(f"{output_directory}{file_name}", 'r+') as nc:
-        # Add global metadata comments
-        nc.setncattr("comments", "Data processed by goesgcp, author: Helvecio B. L. Neto (2025)")
-        nc.renameVariable('Band1', var_name)
-        # # Add new attributes
-        # nc[var_name].setncattr('long_name', long_name)
-        nc[var_name].setncattr('scale_factor', np.float32(scale_factor))
-        nc[var_name].setncattr('add_offset', np.float32(add_offset))
-        # nc[var_name].setncattr('missing_value', fill_value)
-        nc[var_name].setncattr('units', np.float32(units))
-        # Add variable satlat
-        nc.createDimension('satlat', 1)
-        nc.createVariable('satlat', 'f4', ('satlat',))
-        nc.variables['satlat'][:] = float(satlat)
-        nc.variables['satlat'].long_name = 'Satellite Latitude'
-        nc.variables['satlat'].units = 'degrees_north'
-        # Add variable satlon
-        nc.createDimension('satlon', 1)
-        nc.createVariable('satlon', 'f4', ('satlon',))
-        nc.variables['satlon'][:] = float(satlon)
-        nc.variables['satlon'].long_name = 'Satellite Longitude'
-        nc.variables['satlon'].units = 'degrees_east'
-        # Add variable julian_day
-        nc.createDimension('julian_day', 1)
-        nc.createVariable('julian_day', 'i2', ('julian_day',))
-        nc.variables['julian_day'][:] = int(file_datetime.timetuple().tm_yday)
-        nc.variables['julian_day'].long_name = 'Julian day'
-        nc.variables['julian_day'].units = 'day'
-        nc.variables['julian_day'].comment = str(file_datetime.timetuple().tm_yday)
-        # Add variable time_of_day
-        nc.createDimension('time_of_day', 4)
-        nc.createVariable('time_of_day', 'S1', ('time_of_day',))
-        nc.variables['time_of_day'][:] = netCDF4.stringtochar(np.array([str(file_datetime.strftime("%H%M"))], 'S4'))
-        nc.variables['time_of_day'].long_name = 'Time of day'
-        nc.variables['time_of_day'].units = 'hour and minute'
-        nc.variables['time_of_day'].comment = str(file_datetime.strftime("%H%M"))
+    # Reproject the file
+    gdal.Warp(output_file, src_ds, **kwargs)
+    src_ds = None
+
+    # Remap the file
+    if base_remap:
+        remap_file((base_remap, output_file, method))
+
+    # Add metadata to the file
+    if more_info:
+        add_info(output_file,
+                 f"{output_directory}{file_name}",
+                 var_name, 
+                 scale_factor, add_offset, units, satlat, satlon,
+                 file_datetime, resolution)
+
     return
 
 
@@ -293,20 +237,78 @@ def crop_reproject(args):
 def remap_file(args):
     """ Remap the download file based on the input file. """
 
-    base_file, target_file, output_file, method = args
-
-    # Run the cdo command
-    cdo_command = [
-        "cdo", method+"," + base_file, target_file, output_file
-    ]
-
+    base_remap, src_file, method = args
+    # Target is a temporary file based on the output_file add _tmp2
+    target_file = src_file.replace("_tmp1.nc", "_tmp2.nc")
+    # Remap the file using CDO
+    cdo_command = ["cdo", method+"," + base_remap, src_file, target_file]
     subprocess.run(cdo_command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    # Remove the temporary file
+    pathlib.Path(src_file).unlink
+    # Rename the target file to the output_file
+    pathlib.Path(target_file).rename(src_file)
+    return
 
-    # try:
-    #     subprocess.run(cdo_command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    # except subprocess.CalledProcessError as e:
-    #     print(f"Error remapping file {target_file}: {e}")
-    #     pass
+
+def add_info(input_file, output_file, var_name,
+            scale_factor, add_offset, units, satlat, satlon,
+            file_datetime, resolution):
+    # Abrir o arquivo NetCDF usando xarray sem aplicar cf-conventions
+    ds = xr.open_dataset(input_file, engine="netcdf4", decode_cf=False)
+    ds.attrs["comments"] = "Data processed by goesgcp, author: Helvecio B. L. Neto (2025)"
+    # Check if dtype of Band1 is not int16 and apply the scale_factor and add_offset
+    if ds['Band1'].dtype != "int16":
+        # Get only numpy array from Band1
+        array = ds['Band1'].values / float(scale_factor) - float(add_offset)
+        array = array.astype(np.int16)
+        ds['Band1'] = xr.DataArray(array,
+                                   dims=ds['Band1'].dims,
+                                   coords=ds['Band1'].coords,
+                                   attrs=ds['Band1'].attrs)
+    # Renomear variável
+    ds = ds.rename({"Band1": var_name})
+    # Update resolution
+    ds[var_name].attrs.update({
+        "resolution": f"{resolution} degrees"
+    })    
+    # Adicionar novos atributos à variável
+    ds[var_name].attrs.update({
+        "scale_factor": np.float32(scale_factor),
+        "add_offset": np.float32(add_offset),
+        "units": np.float32(units),
+    })
+    # Criar e adicionar a variável satlat
+    ds["satlat"] = xr.DataArray(np.array([float(satlat)], dtype=np.float32), dims="satlat", attrs={
+        "long_name": "Satellite Latitude",
+        "units": "degrees_north"
+    })
+    # Criar e adicionar a variável satlon
+    ds["satlon"] = xr.DataArray(np.array([float(satlon)], dtype=np.float32), dims="satlon", attrs={
+        "long_name": "Satellite Longitude",
+        "units": "degrees_east"
+    })
+    # Criar e adicionar a variável julian_day
+    julian_day_value = int(file_datetime.timetuple().tm_yday)
+    ds["julian_day"] = xr.DataArray(np.array([julian_day_value], dtype=np.int16), dims="julian_day", attrs={
+        "long_name": "Julian day",
+        "units": "day",
+        "comment": str(julian_day_value)
+    })
+    # Criar e adicionar a variável time_of_day
+    time_of_day_str = str(file_datetime.strftime("%H%M"))
+    ds["time_of_day"] = xr.DataArray(np.array(list(time_of_day_str), dtype="S1"), dims="time_of_day", attrs={
+        "long_name": "Time of day",
+        "units": "hour and minute",
+        "comment": time_of_day_str
+    })
+    # Salvar e fechar o arquivo aplicando encoding e salve como classic salva sem cf-conventions
+    ds.to_netcdf(output_file,
+                encoding={var_name: {"dtype": "int16"}},
+                format="NETCDF3_CLASSIC",
+                engine="netcdf4")
+    ds.close()
+    # Remover o arquivo de entrada
+    pathlib.Path(input_file).unlink()
 
 
 #Create connection
@@ -320,34 +322,34 @@ def process_file(args):
     bucket_name, blob_name, local_path, output_path, var_name, lat_min, lat_max, lon_min, lon_max, resolution, \
     save_format, retries, remap, met, more_info, file_pattern, classic_format = args
 
-    # #Download the file
-    # attempt = 0
-    # while attempt < retries:
-    #     try:
-    #         # Connect to the bucket
-    #         bucket = storage_client.bucket(bucket_name)
-    #         blob = bucket.blob(blob_name)
-    #         blob.download_to_filename(local_path, timeout=120)
-    #         break  # Exit the loop if the download is successful
-    #     except (GoogleAPIError, Exception) as e:  # Catch any exception
-    #         attempt += 1
-    #         if attempt < retries:
-    #             time.sleep(2 ** attempt)  # Backoff exponencial
-    #         else:
-    #             with open('fail.log', 'a') as log_file:
-    #                 log_file.write(f"Failed to download {blob_name} after {retries} attempts. Error: {e}\n")
+    #Download the file
+    attempt = 0
+    while attempt < retries:
+        try:
+            # Connect to the bucket
+            bucket = storage_client.bucket(bucket_name)
+            blob = bucket.blob(blob_name)
+            blob.download_to_filename(local_path, timeout=120)
+            break  # Exit the loop if the download is successful
+        except (GoogleAPIError, Exception) as e:  # Catch any exception
+            attempt += 1
+            if attempt < retries:
+                time.sleep(2 ** attempt)  # Backoff exponencial
+            else:
+                with open('fail.log', 'a') as log_file:
+                    log_file.write(f"Failed to download {blob_name} after {retries} attempts. Error: {e}\n")
     #Crop the file
-    # try:
-    crop_reproject((local_path, output_path,
-                    var_name, lat_min, lat_max, lon_min, lon_max,
-                    resolution, save_format, 
-                    more_info, file_pattern, classic_format, remap, met))
-    #     # Remove the local file
-    #     pathlib.Path(local_path).unlink()
-    # except Exception as e:
-    #     with open('fail.log', 'a') as log_file:
-    #         log_file.write(f"Failed to process {blob_name}. Error: {e}\n")
-    #     pass
+    try:
+        crop_reproject((local_path, output_path,
+                        var_name, lat_min, lat_max, lon_min, lon_max,
+                        resolution, save_format, 
+                        more_info, file_pattern, classic_format, remap, met))
+        # Remove the local file
+        pathlib.Path(local_path).unlink()
+    except Exception as e:
+        with open('fail.log', 'a') as log_file:
+            log_file.write(f"Failed to process {blob_name}. Error: {e}\n")
+        pass
 
 
 
@@ -409,10 +411,10 @@ def main():
     parser.add_argument('--bt_min', nargs=2, type=int, default=[0, 60], help='Filter data between these minutes (e.g., 0 60)')
 
     # Geographic bounding box
-    parser.add_argument('--lat_min', type=float, default=-36, help='Minimum latitude of the bounding box')
-    parser.add_argument('--lat_max', type=float, default=9, help='Maximum latitude of the bounding box')
-    parser.add_argument('--lon_min', type=float, default=-75, help='Minimum longitude of the bounding box')
-    parser.add_argument('--lon_max', type=float, default=-29, help='Maximum longitude of the bounding box')
+    parser.add_argument('--lat_min', type=float, default=-35, help='Minimum latitude of the bounding box')
+    parser.add_argument('--lat_max', type=float, default=8, help='Maximum latitude of the bounding box')
+    parser.add_argument('--lon_min', type=float, default=-74, help='Minimum longitude of the bounding box')
+    parser.add_argument('--lon_max', type=float, default=-30, help='Maximum longitude of the bounding box')
     parser.add_argument('--resolution', type=float, default=0.01, help='Resolution of the output file')
     parser.add_argument('--output', type=str, default='./output/', help='Path for saving output files')
 
@@ -424,7 +426,7 @@ def main():
     parser.add_argument('--parallel', type=lambda x: bool(strtobool(x)), default=True, help='Use parallel processing')
     parser.add_argument('--processes', type=int, default=4, help='Number of processes for parallel execution')
     parser.add_argument('--max_attempts', type=int, default=3, help='Number of attempts to download a file')
-    parser.add_argument('--info', type=lambda x: bool(strtobool(x)), default=False, help='Show information messages')
+    parser.add_argument('--info', type=lambda x: bool(strtobool(x)), default=True, help='Show information messages')
     parser.add_argument('--save_format', type=str, default='by_date', choices=['flat', 'by_date','julian'],
                     help="Save the files in a flat structure or by date")
     parser.add_argument('--file_pattern', type=str, default='%Y%m%d_%H%M', help='Pattern for the files')

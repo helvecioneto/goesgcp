@@ -1,4 +1,7 @@
+pandas
+xarray
 google-cloud-storage
 netcdf4
 tqdm
 setuptools
+gdal==3.10.2
