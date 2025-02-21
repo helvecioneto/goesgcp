@@ -22,7 +22,7 @@
 Install the package via `pip`:
 
 ```bash
-pip install goesgcp
+python3 -m pip install git+https://github.com/helvecioneto/goesgcp.git@labren
 ```
 
 
