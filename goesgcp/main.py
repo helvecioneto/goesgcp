@@ -1,7 +1,6 @@
 import pathlib
 import shutil
 import time
-import xarray as xr
 import subprocess
 import argparse
 import sys
@@ -10,14 +9,14 @@ import pandas as pd
 from distutils.util import strtobool
 from multiprocessing import Pool
 from google.cloud import storage
-from datetime import datetime, timedelta, timezone
-from pyproj import CRS, Transformer
 from google.api_core.exceptions import GoogleAPIError
+from datetime import datetime, timedelta, timezone
 import netCDF4
-import pyproj
 import numpy as np
+from osgeo import gdal, osr
 import warnings
 warnings.filterwarnings('ignore')
+gdal.PushErrorHandler('CPLQuietErrorHandler')
 
 
 def list_blobs(connection, bucket_name, prefix):
@@ -157,9 +156,6 @@ def get_recent_files(connection, bucket_name, base_prefix, pattern, min_files):
     # Return only the names of the most recent files, according to the minimum requested
     return [file[0] for file in files[:min_files]]
 
-from osgeo import gdal, osr
-
-gdal.PushErrorHandler('CPLQuietErrorHandler')
 
 
 def crop_reproject(args):
@@ -171,19 +167,20 @@ def crop_reproject(args):
     more_info, file_pattern, classic_format, remap, method = args
 
     # Read file using gdal
-    img = gdal.Open(f"NETCDF:{file}:"+var_name)
+    src_ds = gdal.Open(f"NETCDF:{file}:"+var_name)
 
     # Read the header metadata
-    metadata = img.GetMetadata()
+    metadata = src_ds.GetMetadata()
     scale_factor = metadata.get(var_name + '#scale_factor')
     add_offset = metadata.get(var_name + '#add_offset')
     fill_value = metadata.get(var_name + '#_FillValue')
     units = metadata.get(var_name + '#units')
-    long_name = metadata.get(var_name + '#long_name')
+    satlat = metadata.get('goes_imager_projection#latitude_of_projection_origin')
+    satlon = metadata.get('goes_imager_projection#longitude_of_projection_origin')
 
     # Get source projection
     source_prj = osr.SpatialReference()
-    source_prj.ImportFromProj4(img.GetProjectionRef())
+    source_prj.ImportFromProj4(src_ds.GetProjectionRef())
 
     # Set target projection
     target_prj = osr.SpatialReference()
@@ -227,7 +224,6 @@ def crop_reproject(args):
     else:
         resample_alg = gdal.GRA_NearestNeighbour
 
-    # Define the parameters of the output file
     kwargs = {
         'format': 'netCDF',
         'srcSRS': source_prj.ExportToWkt(),
@@ -242,16 +238,16 @@ def crop_reproject(args):
 
     # Verify if remap is not a string
     if type(remap) != str:
-        ds = gdal.Warp(f"{output_directory}{file_name}", img, **kwargs)
+        gdal.Warp(f"{output_directory}{file_name}", img, **kwargs)
+        img = None, None
     else:
         # Reproject the file and save as temporary file 1
-        ds = gdal.Warp(f"tmp/{file_name}_tmp1.nc", img, **kwargs)
+        gdal.Warp(f"tmp/{file_name}_tmp1.nc", src_ds, **kwargs)
+        img = None       
+        # Remap
         remap_file((remap, f"tmp/{file_name}_tmp1.nc",
                      f"{output_directory}{file_name}", method))
-        # Delete temporary file
-        pathlib.Path(f"tmp/{file_name}_tmp1.nc").unlink()
-    # Close img
-    ds, img = None, None
+        return
 
     # Add metadata to the file using netCDF4 import Dataset
     with netCDF4.Dataset(f"{output_directory}{file_name}", 'r+') as nc:
@@ -260,20 +256,20 @@ def crop_reproject(args):
         nc.renameVariable('Band1', var_name)
         # # Add new attributes
         # nc[var_name].setncattr('long_name', long_name)
-        # # nc[var_name].setncattr('scale_factor', scale_factor)
-        # nc[var_name].setncattr('add_offset', add_offset)
+        nc[var_name].setncattr('scale_factor', np.float32(scale_factor))
+        nc[var_name].setncattr('add_offset', np.float32(add_offset))
         # nc[var_name].setncattr('missing_value', fill_value)
         nc[var_name].setncattr('units', np.float32(units))
         # Add variable satlat
         nc.createDimension('satlat', 1)
         nc.createVariable('satlat', 'f4', ('satlat',))
-        nc.variables['satlat'][:] = 0
+        nc.variables['satlat'][:] = float(satlat)
         nc.variables['satlat'].long_name = 'Satellite Latitude'
         nc.variables['satlat'].units = 'degrees_north'
         # Add variable satlon
         nc.createDimension('satlon', 1)
         nc.createVariable('satlon', 'f4', ('satlon',))
-        nc.variables['satlon'][:] = 0
+        nc.variables['satlon'][:] = float(satlon)
         nc.variables['satlon'].long_name = 'Satellite Longitude'
         nc.variables['satlon'].units = 'degrees_east'
         # Add variable julian_day
@@ -282,6 +278,7 @@ def crop_reproject(args):
         nc.variables['julian_day'][:] = int(file_datetime.timetuple().tm_yday)
         nc.variables['julian_day'].long_name = 'Julian day'
         nc.variables['julian_day'].units = 'day'
+        nc.variables['julian_day'].comment = str(file_datetime.timetuple().tm_yday)
         # Add variable time_of_day
         nc.createDimension('time_of_day', 4)
         nc.createVariable('time_of_day', 'S1', ('time_of_day',))
@@ -298,23 +295,18 @@ def remap_file(args):
 
     base_file, target_file, output_file, method = args
 
-
     # Run the cdo command
     cdo_command = [
         "cdo", method+"," + base_file, target_file, output_file
     ]
 
-    try:
-        subprocess.run(cdo_command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-    except subprocess.CalledProcessError as e:
-        print(f"Error remapping file {target_file}: {e}")
-        pass
+    subprocess.run(cdo_command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
 
-    # Delete the target file
-    pathlib.Path(target_file).unlink()
-
-    # Rename the output file
-    pathlib.Path(output_file).rename(target_file)
+    # try:
+    #     subprocess.run(cdo_command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    # except subprocess.CalledProcessError as e:
+    #     print(f"Error remapping file {target_file}: {e}")
+    #     pass
 
 
 #Create connection
@@ -329,33 +321,33 @@ def process_file(args):
     save_format, retries, remap, met, more_info, file_pattern, classic_format = args
 
     # #Download the file
-    attempt = 0
-    while attempt < retries:
-        try:
-            # Connect to the bucket
-            bucket = storage_client.bucket(bucket_name)
-            blob = bucket.blob(blob_name)
-            blob.download_to_filename(local_path, timeout=120)
-            break  # Exit the loop if the download is successful
-        except (GoogleAPIError, Exception) as e:  # Catch any exception
-            attempt += 1
-            if attempt < retries:
-                time.sleep(2 ** attempt)  # Backoff exponencial
-            else:
-                with open('fail.log', 'a') as log_file:
-                    log_file.write(f"Failed to download {blob_name} after {retries} attempts. Error: {e}\n")
-    # Crop the file
-    try:
-        crop_reproject((local_path, output_path,
-                        var_name, lat_min, lat_max, lon_min, lon_max,
-                        resolution, save_format, 
-                        more_info, file_pattern, classic_format, remap, met))
-        # Remove the local file
-        pathlib.Path(local_path).unlink()
-    except Exception as e:
-        with open('fail.log', 'a') as log_file:
-            log_file.write(f"Failed to process {blob_name}. Error: {e}\n")
-        pass
+    # attempt = 0
+    # while attempt < retries:
+    #     try:
+    #         # Connect to the bucket
+    #         bucket = storage_client.bucket(bucket_name)
+    #         blob = bucket.blob(blob_name)
+    #         blob.download_to_filename(local_path, timeout=120)
+    #         break  # Exit the loop if the download is successful
+    #     except (GoogleAPIError, Exception) as e:  # Catch any exception
+    #         attempt += 1
+    #         if attempt < retries:
+    #             time.sleep(2 ** attempt)  # Backoff exponencial
+    #         else:
+    #             with open('fail.log', 'a') as log_file:
+    #                 log_file.write(f"Failed to download {blob_name} after {retries} attempts. Error: {e}\n")
+    #Crop the file
+    # try:
+    crop_reproject((local_path, output_path,
+                    var_name, lat_min, lat_max, lon_min, lon_max,
+                    resolution, save_format, 
+                    more_info, file_pattern, classic_format, remap, met))
+    #     # Remove the local file
+    #     pathlib.Path(local_path).unlink()
+    # except Exception as e:
+    #     with open('fail.log', 'a') as log_file:
+    #         log_file.write(f"Failed to process {blob_name}. Error: {e}\n")
+    #     pass
 
 
 
@@ -417,10 +409,10 @@ def main():
     parser.add_argument('--bt_min', nargs=2, type=int, default=[0, 60], help='Filter data between these minutes (e.g., 0 60)')
 
     # Geographic bounding box
-    parser.add_argument('--lat_min', type=float, default=-35, help='Minimum latitude of the bounding box')
-    parser.add_argument('--lat_max', type=float, default=8, help='Maximum latitude of the bounding box')
-    parser.add_argument('--lon_min', type=float, default=-74, help='Minimum longitude of the bounding box')
-    parser.add_argument('--lon_max', type=float, default=-30, help='Maximum longitude of the bounding box')
+    parser.add_argument('--lat_min', type=float, default=-36, help='Minimum latitude of the bounding box')
+    parser.add_argument('--lat_max', type=float, default=9, help='Maximum latitude of the bounding box')
+    parser.add_argument('--lon_min', type=float, default=-75, help='Minimum longitude of the bounding box')
+    parser.add_argument('--lon_max', type=float, default=-29, help='Maximum longitude of the bounding box')
     parser.add_argument('--resolution', type=float, default=0.01, help='Resolution of the output file')
     parser.add_argument('--output', type=str, default='./output/', help='Path for saving output files')
 
@@ -433,9 +425,9 @@ def main():
     parser.add_argument('--processes', type=int, default=4, help='Number of processes for parallel execution')
     parser.add_argument('--max_attempts', type=int, default=3, help='Number of attempts to download a file')
     parser.add_argument('--info', type=lambda x: bool(strtobool(x)), default=False, help='Show information messages')
-    parser.add_argument('--save_format', type=str, default='flat', choices=['flat', 'by_date','julian'],
+    parser.add_argument('--save_format', type=str, default='by_date', choices=['flat', 'by_date','julian'],
                     help="Save the files in a flat structure or by date")
-    parser.add_argument('--file_pattern', type=str, default=None, help='Pattern for the files')
+    parser.add_argument('--file_pattern', type=str, default='%Y%m%d_%H%M', help='Pattern for the files')
     parser.add_argument('--netcdf_classic', type=lambda x: bool(strtobool(x)), default=False, help='Save the files in netCDF classic format')
     # Parse arguments
     args = parser.parse_args()
@@ -545,7 +537,7 @@ def main():
         loading_bar.close()
 
     # Clean up the temporary directory
-    shutil.rmtree('tmp/')
+    # shutil.rmtree('tmp/')
 
 if __name__ == '__main__':
     main()

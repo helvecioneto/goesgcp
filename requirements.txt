@@ -1,7 +1,4 @@
 google-cloud-storage
-pyproj
-xarray
 netcdf4
-rioxarray
 tqdm
 setuptools
