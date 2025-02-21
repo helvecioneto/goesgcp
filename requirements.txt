@@ -1,4 +1,4 @@
-gdal==3.10.2
+gdal==3.10.1
 pandas
 xarray
 google-cloud-storage
