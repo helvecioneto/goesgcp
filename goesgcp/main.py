@@ -539,7 +539,7 @@ def main():
         loading_bar.close()
 
     # Clean up the temporary directory
-    # shutil.rmtree('tmp/')
+    shutil.rmtree('tmp/')
 
 if __name__ == '__main__':
     main()
