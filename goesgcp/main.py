@@ -14,6 +14,7 @@ from datetime import datetime, timedelta, timezone
 import xarray as xr
 import numpy as np
 from osgeo import gdal, osr
+import netCDF4
 import warnings
 warnings.filterwarnings('ignore')
 gdal.PushErrorHandler('CPLQuietErrorHandler')
@@ -229,7 +230,6 @@ def crop_reproject(args):
                  var_name, 
                  scale_factor, add_offset, units, satlat, satlon,
                  file_datetime, resolution)
-
     return
 
 
@@ -294,19 +294,26 @@ def add_info(input_file, output_file, var_name,
         "units": "day",
         "comment": str(julian_day_value)
     })
-    # Criar e adicionar a variável time_of_day
-    time_of_day_str = str(file_datetime.strftime("%H%M"))
-    ds["time_of_day"] = xr.DataArray(np.array(list(time_of_day_str), dtype="S1"), dims="time_of_day", attrs={
-        "long_name": "Time of day",
-        "units": "hour and minute",
-        "comment": time_of_day_str
-    })
+
     # Salvar e fechar o arquivo aplicando encoding e salve como classic salva sem cf-conventions
     ds.to_netcdf(output_file,
                 encoding={var_name: {"dtype": "int16"}},
                 format="NETCDF3_CLASSIC",
                 engine="netcdf4")
     ds.close()
+
+    # Add time_of_day as a string to the file
+    nc = netCDF4.Dataset(output_file, 'r+')
+    time_of_day = str(file_datetime.strftime("%H%M"))
+    time_of_day_char = netCDF4.stringtochar(np.array([str(time_of_day)], 'S4'))
+    nc.createDimension('time_of_day', 4)
+    nc.createVariable('time_of_day', 'S1', ('time_of_day',))
+    nc.variables['time_of_day'][:] = time_of_day_char
+    nc.variables['time_of_day'].long_name = 'Time of day'
+    nc.variables['time_of_day'].units = 'hour and minute'
+    nc.variables['time_of_day'].comment = str(time_of_day)
+    nc.close()
+
     # Remover o arquivo de entrada
     pathlib.Path(input_file).unlink()
 
@@ -344,13 +351,12 @@ def process_file(args):
                         var_name, lat_min, lat_max, lon_min, lon_max,
                         resolution, save_format, 
                         more_info, file_pattern, classic_format, remap, met))
-        # Remove the local file
-        pathlib.Path(local_path).unlink()
     except Exception as e:
         with open('fail.log', 'a') as log_file:
             log_file.write(f"Failed to process {blob_name}. Error: {e}\n")
         pass
-
+    #Remove the local file
+    pathlib.Path(local_path).unlink()
 
 
 def main():
