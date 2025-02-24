@@ -1,5 +1,7 @@
-google-cloud-storage
-pyproj
+gdal==3.6.2
+pandas
 xarray
+google-cloud-storage
 netcdf4
-rioxarray
+tqdm
+setuptools
