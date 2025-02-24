@@ -39,7 +39,7 @@ def install_gdal():
                 sys.exit(1)
 
             print(f"Downloading Gdal (Python {python_version[0]}.{python_version[1]})...")
-            subprocess.run(f"pip3 install {gdal_url}", shell=True, check=True)
+            subprocess.run(f"python3 -m pip install {gdal_url}", shell=True, check=True)
 
         else:
             print("Python version not supported for GDAL download.")
