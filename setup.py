@@ -1,8 +1,4 @@
-import os
 import subprocess
-import sys
-import platform
-from setuptools import setup, find_packages
 
 # Upgrade pip and setuptools before installing dependencies
 try:
@@ -11,6 +7,12 @@ try:
     subprocess.run(["python", "-m", "pip", "install", "--upgrade", "setuptools"], check=True)
 except subprocess.CalledProcessError:
     print("Error upgrading pip and setuptools.")
+
+import os
+import sys
+import platform
+from setuptools import setup, find_packages
+
 
 def install_gdal():
     """Installs GDAL based on the operating system."""
