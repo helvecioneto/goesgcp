@@ -1,56 +1,64 @@
-
 import os
 import subprocess
-from setuptools import setup, find_packages
 import sys
 import platform
+from setuptools import setup, find_packages
 
+# Upgrade pip and setuptools before installing dependencies
 try:
     subprocess.run(["python", "-m", "ensurepip", "--upgrade"], check=True)
     subprocess.run(["python", "-m", "pip", "install", "--upgrade", "pip"], check=True)
     subprocess.run(["python", "-m", "pip", "install", "--upgrade", "setuptools"], check=True)
-except:
-    pass
+except subprocess.CalledProcessError:
+    print("Error upgrading pip and setuptools.")
 
 def install_gdal():
+    """Installs GDAL based on the operating system."""
     system = platform.system()
-    if system == "Linux":
-        print("Instalando GDAL no Linux...")
-        subprocess.run(
+
+    try:
+        if system == "Linux":
+            print("Installing GDAL on Linux...")
+            subprocess.run(
                 ["python", "-m", "pip", "install", "gdal", "-f", "https://girder.github.io/large_image_wheels"],
                 check=True
             )
-    elif system == "Windows":
-        python_version = sys.version_info
-        if python_version[0] == 3:
-            if python_version[1] == 10:
-                gdal_url = "https://github.com/cgohlke/geospatial-wheels/releases/download/v2025.1.20/GDAL-3.10.1-cp310-cp310-win_amd64.whl"
-            elif python_version[1] == 11:
-                gdal_url = "https://github.com/cgohlke/geospatial-wheels/releases/download/v2025.1.20/GDAL-3.10.1-cp311-cp311-win_amd64.whl"
-            elif python_version[1] == 12:
-                gdal_url = "https://github.com/cgohlke/geospatial-wheels/releases/download/v2025.1.20/GDAL-3.10.1-cp312-cp312-win_amd64.whl"
-            elif python_version[1] == 13:
-                gdal_url = "https://github.com/cgohlke/geospatial-wheels/releases/download/v2025.1.20/GDAL-3.10.1-cp313-cp313-win_amd64.whl"
-            else:
-                print("Python version not supported for GDAL download.")
-                sys.exit(1)
-            print(f"Downloading Gdal (Python {python_version[0]}.{python_version[1]})...")
-            subprocess.run(
-                ["python", "-m", "pip", "install", gdal_url],
-                check=True)
-        else:
-            print("Python version not supported for GDAL download.")
-            sys.exit(1)
-    elif system == "Darwin":
-        print("The GDAL package is not available for macOS.")
-        sys.exit(1)
-    else:
-        print("Operating system not supported.")
-        sys.exit(1)
 
-# Install GDAL
+        elif system == "Windows":
+            python_version = sys.version_info
+            if python_version[0] == 3:
+                version_map = {
+                    10: "cp310",
+                    11: "cp311",
+                    12: "cp312",
+                    13: "cp313"
+                }
+                if python_version[1] in version_map:
+                    gdal_url = f"https://github.com/cgohlke/geospatial-wheels/releases/download/v2025.1.20/GDAL-3.10.1-{version_map[python_version[1]]}-win_amd64.whl"
+                    print(f"Downloading GDAL for Python {python_version[0]}.{python_version[1]}...")
+                    subprocess.run(["python", "-m", "pip", "install", gdal_url], check=True)
+                else:
+                    print("Unsupported Python version for GDAL.")
+                    sys.exit(1)
+            else:
+                print("Unsupported Python version for GDAL.")
+                sys.exit(1)
+
+        elif system == "Darwin":
+            print("GDAL is not available for macOS via this installer.")
+            sys.exit(1)
+
+        else:
+            print("Unsupported operating system.")
+            sys.exit(1)
+    
+    except subprocess.CalledProcessError:
+        print("Error installing GDAL.")
+
+# Install GDAL before running setup
 install_gdal()
 
+# Read dependencies from requirements.txt
 req_file = os.path.join(os.path.dirname(__file__), "requirements.txt")
 if os.path.exists(req_file):
     with open(req_file) as f:
@@ -77,7 +85,7 @@ setup(
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
         "Programming Language :: Python :: 3.12",
-	    "Topic :: Scientific/Engineering :: Atmospheric Science",
+        "Topic :: Scientific/Engineering :: Atmospheric Science",
         "Topic :: Scientific/Engineering :: GIS",
         "Topic :: Scientific/Engineering",
         "Topic :: Software Development",
