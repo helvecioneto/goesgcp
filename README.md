@@ -26,6 +26,37 @@ pip install goesgcp
 ```
 
 
+Obs: If gdal is not installed, you can install it using the following command:
+
+Linux:
+```bash
+sudo apt-get install gdal-bin
+```
+
+Windows:
+```bash
+conda install -c conda-forge gdal
+```
+
+MacOS:
+```bash
+brew install gdal
+```
+
+Or you can install the wheel file:
+
+```bash
+python -m pip install gdal -f https://girder.github.io/large_image_wheels
+```
+
+and install other dependencies:
+
+```bash
+pip install -r requirements.txt
+```
+
+
+
 ## Usage
 
 ### Available Command-Line Arguments
