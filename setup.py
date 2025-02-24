@@ -19,8 +19,7 @@ def install_gdal():
     if system == "Linux":
         print("Instalando GDAL no Linux...")
         subprocess.run(
-            "python -m pip install gdal -f https://girder.github.io/large_image_wheels", 
-            shell=True, check=True
+            "python -m pip install gdal -f https://girder.github.io/large_image_wheels"
         )
 
     elif system == "Windows":
@@ -39,7 +38,7 @@ def install_gdal():
                 sys.exit(1)
 
             print(f"Downloading Gdal (Python {python_version[0]}.{python_version[1]})...")
-            subprocess.run(f"python -m pip install {gdal_url}", shell=True, check=True)
+            subprocess.run(f"python -m pip install {gdal_url}")
 
         else:
             print("Python version not supported for GDAL download.")
