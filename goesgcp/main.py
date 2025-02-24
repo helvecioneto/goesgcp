@@ -354,7 +354,7 @@ def main():
     # Satellite and product settings
     parser.add_argument('--satellite', type=str, default='goes-16', choices=['goes-16', 'goes-18'], help='Name of the satellite (e.g., goes16)')
     parser.add_argument('--product', type=str, default='ABI-L2-CMIPF', help='Name of the satellite product', choices=product_names)
-    parser.add_argument('--var_name', type=str, default=None, help='Variable name to extract (e.g., CMI)')
+    parser.add_argument('--var_name', type=str, default='CMI', help='Variable name to extract (e.g., CMI)')
     parser.add_argument('--channel', type=int, default=13, help='Channel to use (e.g., 13)')
     parser.add_argument('--op_mode', type=str, default='M6', help='Operational mode to use (e.g., M6C)')
 
