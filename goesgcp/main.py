@@ -16,86 +16,103 @@ import numpy as np
 from osgeo import gdal, osr
 import netCDF4
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 warnings.filterwarnings('ignore')
 gdal.PushErrorHandler('CPLQuietErrorHandler')
 
 
 def list_blobs(connection, bucket_name, prefix):
     """
-    Lists blobs in a GCP bucket with a specified prefix.
-    Returns a list of blobs with their metadata.
+    Retorna um iterador com os blobs de um bucket GCP filtrando por um prefixo.
     """
     bucket = connection.bucket(bucket_name)
-    blobs = bucket.list_blobs(prefix=prefix)
-    return blobs
+    return bucket.list_blobs(prefix=prefix)
 
 def get_directory_prefix(year, julian_day, hour):
-    """Generates the directory path based on year, Julian day, and hour."""
+    """Gera o caminho do diretório com base no ano, dia juliano e hora."""
     return f"{year}/{julian_day}/{str(hour).zfill(2)}/"
 
-
-def get_files_period(connection, bucket_name, base_prefix, pattern, 
-                     start, end, bt_hour=[], bt_min=[], freq=None):
+def get_files_period(connection, bucket_name, base_prefix, pattern, start, end, bt_hour=[], bt_min=[], freq=None):
     """
-    Fetches files from a GCP bucket within a specified time period and returns them as a DataFrame.
-
-    :param connection: The GCP storage client connection.
-    :param bucket_name: Name of the GCP bucket.
-    :param base_prefix: Base directory prefix for the files.
-    :param pattern: Search pattern for file names.
-    :param start: Start datetime (inclusive).
-    :param end: End datetime (exclusive).
-    :return: DataFrame containing the file names and their metadata.
+    Busca arquivos em um bucket GCP dentro de um período especificado e retorna-os como uma lista.
+    
+    Parâmetros:
+        connection: Conexão com o GCP Storage.
+        bucket_name: Nome do bucket.
+        base_prefix: Prefixo base do diretório.
+        pattern: Padrão que deve estar presente no nome do arquivo.
+        start: Data/hora inicial (inclusiva).
+        end: Data/hora final (exclusiva).
+        bt_hour: Intervalo de horas para filtrar os resultados.
+        bt_min: Intervalo de minutos para filtrar os resultados.
+        freq: Frequência para agrupamento dos dados.
+        
+    Retorna:
+        Lista de nomes dos arquivos que atendem aos critérios.
     """
-
-    print(f"GOESGCP: Fetching files between {start} and {end}...")
-    # Ensure datetime objects
+    print(f"GOESGCP: Buscando arquivos entre {start} e {end}...")
+    # Converter e garantir que as datas estejam em UTC
     start = pd.to_datetime(start).tz_localize('UTC')
     end = pd.to_datetime(end).tz_localize('UTC')
-    # Initialize list to store file metadata
-    files_metadata = []
-    # Generate the list of dates from start to end
+    
+    # Função interna para buscar os blobs de um determinado horário
+    def fetch_files(temp):
+        year = temp.year
+        julian_day = str(temp.timetuple().tm_yday).zfill(3)
+        hour = temp.hour
+        # Constrói o prefixo completo
+        prefix = f"{base_prefix}/{get_directory_prefix(year, julian_day, hour)}"
+        # Lista os blobs e filtra pelo padrão
+        blobs = list_blobs(connection, bucket_name, prefix)
+        return [{"file_name": blob.name} for blob in blobs if pattern in blob.name]
+    
+    # Gera a lista de horários (a cada hora) entre start e end
+    times = []
     temp = start
     while temp <= end:
-        year = temp.year
-        julian_day = str(temp.timetuple().tm_yday).zfill(3)  # Julian day
-        hour = temp.hour
-        # Generate the directory prefix
-        prefix = f"{base_prefix}/{get_directory_prefix(year, julian_day, hour)}"
-        # List blobs in the bucket for the current prefix
-        blobs = list_blobs(connection, bucket_name, prefix)
-        # Filter blobs by pattern
-        for blob in blobs:
-            if pattern in blob.name:
-                files_metadata.append({
-                    'file_name': blob.name,
-                })
-        # Move to the next hour
+        times.append(temp)
         temp += timedelta(hours=1)
-    # Create a DataFrame from the list of files
+    
+    # Usa ThreadPoolExecutor para buscar os arquivos em paralelo
+    files_metadata = []
+    with ThreadPoolExecutor() as executor:
+        # Cada item em results é uma lista de dicionários
+        results = executor.map(fetch_files, times)
+        for file_list in results:
+            files_metadata.extend(file_list)
+    
+    if not files_metadata:
+        print("Nenhum arquivo encontrado que corresponda ao padrão e ao intervalo de tempo.")
+        print(f"Último prefixo buscado: {base_prefix}")
+        sys.exit(1)  # Considere lançar uma exceção em vez de sair abruptamente
+    
+    # Cria o DataFrame e extrai a data/hora a partir do nome do arquivo
     df = pd.DataFrame(files_metadata)
-    if df.empty:
-        print("No files found matching the pattern and time range.")
-        print(prefix)
-        sys.exit(1)
-    # Transform file_name to datetime
-    df['last_modified'] = pd.to_datetime(df['file_name'].str.extract(r'(\d{4}\d{3}\d{2}\d{2})').squeeze(), format='%Y%j%H%M')
-    # Ensure last_modified' is in the correct datetime format without timezone
-    df['last_modified'] = pd.to_datetime(df['last_modified']).dt.tz_localize('UTC')
-    # Filter the DataFrame based on the date range (inclusive)
+    df['last_modified'] = pd.to_datetime(
+        df['file_name'].str.extract(r'(\d{4}\d{3}\d{2}\d{2})').squeeze(),
+        format='%Y%j%H%M'
+    )
+    # Ajusta o timezone para UTC
+    df['last_modified'] = df['last_modified'].dt.tz_localize('UTC')
+    
+    # Filtra os arquivos dentro do intervalo de datas
     df = df[(df['last_modified'] >= start) & (df['last_modified'] <= end)]
-    # Filter the DataFrame based on the hour range
+    
+    # Filtragem adicional por hora, se especificado
     if len(bt_hour) > 1:
         df['hour'] = df['last_modified'].dt.hour
         df = df[(df['hour'] >= bt_hour[0]) & (df['hour'] <= bt_hour[1])]
-    # Filter the DataFrame based on the minute range
+    
+    # Filtragem adicional por minuto, se especificado
     if len(bt_min) > 1:
         df['minute'] = df['last_modified'].dt.minute
         df = df[(df['minute'] >= bt_min[0]) & (df['minute'] <= bt_min[1])]
-    # Filter the DataFrame based on the frequency
+    
+    # Agrupamento por frequência, se necessário
     if freq is not None:
         df['freq'] = df['last_modified'].dt.floor(freq)
         df = df.groupby('freq').first().reset_index()
+    
     return df['file_name'].tolist()
 
 def get_recent_files(connection, bucket_name, base_prefix, pattern, min_files):
@@ -260,7 +277,11 @@ def add_info(input_file, output_file, var_name,
     if ds['Band1'].dtype != "int16":
         # Get only numpy array from Band1
         array = ds['Band1'].values / float(scale_factor) - float(add_offset)
+        # Find values where is nan and set to fill_value
+        # array[np.isnan(array)] = int(ds['Band1'].attrs['_FillValue'])
+        # Convert to int16
         array = array.astype(np.int16)
+        # Set the new array to Band1
         ds['Band1'] = xr.DataArray(array,
                                    dims=ds['Band1'].dims,
                                    coords=ds['Band1'].coords,
@@ -346,15 +367,15 @@ def process_file(args):
                 with open('fail.log', 'a') as log_file:
                     log_file.write(f"Failed to download {blob_name} after {retries} attempts. Error: {e}\n")
     #Crop the file
-    try:
-        crop_reproject((local_path, output_path,
-                        var_name, lat_min, lat_max, lon_min, lon_max,
-                        resolution, save_format, 
-                        more_info, file_pattern, classic_format, remap, met))
-    except Exception as e:
-        with open('fail.log', 'a') as log_file:
-            log_file.write(f"Failed to process {blob_name}. Error: {e}\n")
-        pass
+    # try:
+    crop_reproject((local_path, output_path,
+                    var_name, lat_min, lat_max, lon_min, lon_max,
+                    resolution, save_format, 
+                    more_info, file_pattern, classic_format, remap, met))
+    # except Exception as e:
+    #     with open('fail.log', 'a') as log_file:
+    #         log_file.write(f"Failed to process {blob_name}. Error: {e}\n")
+        # pass
     #Remove the local file
     pathlib.Path(local_path).unlink()
 
@@ -430,7 +451,7 @@ def main():
 
     # Other settings
     parser.add_argument('--parallel', type=lambda x: bool(strtobool(x)), default=True, help='Use parallel processing')
-    parser.add_argument('--processes', type=int, default=4, help='Number of processes for parallel execution')
+    parser.add_argument('--processes', type=int, default=8, help='Number of processes for parallel execution')
     parser.add_argument('--max_attempts', type=int, default=3, help='Number of attempts to download a file')
     parser.add_argument('--info', type=lambda x: bool(strtobool(x)), default=True, help='Show information messages')
     parser.add_argument('--save_format', type=str, default='by_date', choices=['flat', 'by_date','julian'],
