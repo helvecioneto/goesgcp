@@ -1,5 +1,6 @@
 pandas
 xarray
+rioxarray
 google-cloud-storage
 netcdf4
 tqdm
