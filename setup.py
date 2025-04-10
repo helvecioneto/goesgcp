@@ -70,7 +70,7 @@ else:
 
 setup(
     name="goesgcp",
-    version="3.0.0",
+    version="3.0.1",
     author="Helvecio B. L. Neto",
     author_email="helvecioblneto@gmail.com",
     description="A package to download and process GOES-16/17 data",
