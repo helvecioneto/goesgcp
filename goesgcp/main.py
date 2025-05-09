@@ -112,6 +112,9 @@ def get_files_period(connection, bucket_name, base_prefix, pattern, start, end, 
     if freq is not None:
         df['freq'] = df['last_modified'].dt.floor(freq)
         df = df.groupby('freq').first().reset_index()
+    else:
+        df['freq'] = df['last_modified']
+        
     
     return df['file_name'].tolist()
 
@@ -367,15 +370,15 @@ def process_file(args):
                 with open('fail.log', 'a') as log_file:
                     log_file.write(f"Failed to download {blob_name} after {retries} attempts. Error: {e}\n")
     #Crop the file
-    # try:
-    crop_reproject((local_path, output_path,
-                    var_name, lat_min, lat_max, lon_min, lon_max,
-                    resolution, save_format, 
-                    more_info, file_pattern, classic_format, remap, met))
-    # except Exception as e:
-    #     with open('fail.log', 'a') as log_file:
-    #         log_file.write(f"Failed to process {blob_name}. Error: {e}\n")
-        # pass
+    try:
+        crop_reproject((local_path, output_path,
+                        var_name, lat_min, lat_max, lon_min, lon_max,
+                        resolution, save_format, 
+                        more_info, file_pattern, classic_format, remap, met))
+    except Exception as e:
+        with open('fail.log', 'a') as log_file:
+            log_file.write(f"Failed to process {blob_name}. Error: {e}\n")
+        pass
     #Remove the local file
     pathlib.Path(local_path).unlink()
 
@@ -425,7 +428,7 @@ def main():
     parser.add_argument('--product', type=str, default='ABI-L2-CMIPF', help='Name of the satellite product', choices=product_names)
     parser.add_argument('--var_name', type=str, default='CMI', help='Variable name to extract (e.g., CMI)')
     parser.add_argument('--channel', type=int, default=2, help='Channel to use (e.g., 13)')
-    parser.add_argument('--op_mode', type=str, default='M6', help='Operational mode to use (e.g., M6C)')
+    parser.add_argument('--op_mode', type=str, default='M6', help='Operational mode to use (e.g., M6, M3)')
 
     # Recent files settings
     parser.add_argument('--recent', type=int, help='Number of recent files to download (e.g., 3)')
@@ -433,7 +436,7 @@ def main():
     # Date and time settings
     parser.add_argument('--start', type=str, help='Start date in YYYY-MM-DD format')
     parser.add_argument('--end', type=str, help='End date in YYYY-MM-DD format')
-    parser.add_argument('--freq', type=str, default='10 min', help='Frequency for the time range (e.g., "10 min")')
+    parser.add_argument('--freq', type=str, default=None, help='Frequency for the time range (e.g., "10 min")')
     parser.add_argument('--bt_hour', nargs=2, type=int, default=[0, 23], help='Filter data between these hours (e.g., 0 23)')
     parser.add_argument('--bt_min', nargs=2, type=int, default=[0, 60], help='Filter data between these minutes (e.g., 0 60)')
 
