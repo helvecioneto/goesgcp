@@ -47,12 +47,10 @@ def install_gdal():
                 sys.exit(1)
 
         elif system == "Darwin":
-            print("GDAL is not available for macOS via this installer.")
-            sys.exit(1)
+            print("Note: GDAL should be installed separately on macOS (e.g., via Homebrew: brew install gdal)")
 
         else:
-            print("Unsupported operating system.")
-            sys.exit(1)
+            print("Unsupported operating system. GDAL must be installed manually.")
     
     except subprocess.CalledProcessError:
         print("Error installing GDAL.")
@@ -70,7 +68,7 @@ else:
 
 setup(
     name="goesgcp",
-    version="3.0.2",
+    version="3.1.2",
     author="Helvecio B. L. Neto",
     author_email="helvecioblneto@gmail.com",
     description="A package to download and process GOES-16/17 data",

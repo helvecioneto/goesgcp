@@ -1,7 +1,10 @@
-pandas
-xarray
-rioxarray
-google-cloud-storage
-netcdf4
-tqdm
-setuptools
+pandas==3.0.0
+xarray==2025.11.0
+rioxarray==0.20.0
+google-cloud-storage==3.9.0
+netCDF4==1.7.4
+tqdm==4.67.3
+setuptools==80.10.2
+numpy==2.4.2
+pyproj==3.7.2
+rasterio==1.5.0
