@@ -1,13 +1,38 @@
+import os
 import pathlib
+import importlib.util
+
+
+def _use_bundled_geo_data():
+    """
+    Ignore PROJ/GDAL environment variables inherited from other installations
+    (e.g. an active conda env) when rasterio ships its own data files (pip wheels).
+    Otherwise rasterio loads an incompatible proj.db and fails with "EPSG code is unknown".
+    """
+    spec = importlib.util.find_spec("rasterio")
+    if spec is None or not spec.submodule_search_locations:
+        return
+    rasterio_dir = pathlib.Path(list(spec.submodule_search_locations)[0])
+    if (rasterio_dir / "proj_data").is_dir():
+        os.environ.pop("PROJ_DATA", None)
+        os.environ.pop("PROJ_LIB", None)
+    if (rasterio_dir / "gdal_data").is_dir():
+        os.environ.pop("GDAL_DATA", None)
+        os.environ.pop("GDAL_DRIVER_PATH", None)
+
+
+# Must run before rasterio/rioxarray are imported
+_use_bundled_geo_data()
+
 import shutil
 import time
 import xarray as xr
+import rioxarray  # noqa: F401 - registers the .rio accessor on xarray objects
 import subprocess
 import argparse
 import sys
 import tqdm
 import pandas as pd
-from distutils.util import strtobool
 from multiprocessing import Pool
 from google.cloud import storage
 from datetime import datetime, timedelta, timezone
@@ -17,6 +42,16 @@ import netCDF4
 import numpy as np
 import warnings
 warnings.filterwarnings('ignore')
+
+
+def strtobool(value):
+    """Converts a string representation of truth to True or False."""
+    value = str(value).strip().lower()
+    if value in ('y', 'yes', 't', 'true', 'on', '1'):
+        return True
+    if value in ('n', 'no', 'f', 'false', 'off', '0'):
+        return False
+    raise argparse.ArgumentTypeError(f"Invalid boolean value: {value!r}")
 
 
 def list_blobs(connection, bucket_name, prefix):
@@ -379,6 +414,7 @@ def remap_file(args):
 def process_file(args):
     """
     Downloads and processes a GOES-16 file.
+    Returns None on success or an error message on failure.
     """
 
     bucket_name, blob_name, local_path, output_path, var_name, lat_min, lat_max, lon_min, lon_max, resolution, \
@@ -398,8 +434,10 @@ def process_file(args):
             if attempt < retries:
                 time.sleep(2 ** attempt)  # Backoff exponencial
             else:
+                error = f"Failed to download {blob_name} after {retries} attempts. Error: {e}"
                 with open('fail.log', 'a') as log_file:
-                    log_file.write(f"Failed to download {blob_name} after {retries} attempts. Error: {e}\n")
+                    log_file.write(error + "\n")
+                return error
     # Crop the file
     try:
         crop_reproject((local_path, output_path,
@@ -409,9 +447,11 @@ def process_file(args):
         # Remove the local file
         pathlib.Path(local_path).unlink()
     except Exception as e:
+        error = f"Failed to process {blob_name}. Error: {e}"
         with open('fail.log', 'a') as log_file:
-            log_file.write(f"Failed to process {blob_name}. Error: {e}\n")
-        pass
+            log_file.write(error + "\n")
+        return error
+    return None
 
 # Create connection
 storage_client = storage.Client.create_anonymous_client()
@@ -579,6 +619,7 @@ def main():
                         bar_format='{l_bar}{bar}| {n_fmt}/{total_fmt} + \
                         [Elapsed:{elapsed} Remaining:<{remaining}]')
 
+    errors = []
     if parallel: # Run in parallel
         # Create a list of tasks
         tasks = [(bucket_name, file, f"tmp/{file.split('/')[-1]}", output_path, var_name,
@@ -588,21 +629,35 @@ def main():
 
         # Download files in parallel
         with Pool(processes=args.processes) as pool:
-            for _ in pool.imap_unordered(process_file, tasks):
+            for error in pool.imap_unordered(process_file, tasks):
+                if error:
+                    errors.append(error)
+                    tqdm.tqdm.write(f"GOESGCP ERROR: {error}", file=sys.stderr)
                 loading_bar.update(1)
         loading_bar.close()
     else: # Run in serial
         for file in files_list:
             local_path = f"tmp/{file.split('/')[-1]}"
-            process_file((bucket_name, file, local_path, output_path, var_name,
+            error = process_file((bucket_name, file, local_path, output_path, var_name,
             lat_min, lat_max, lon_min, lon_max, resolution,
             save_format, max_attempts, remap, method, more_info,
               file_pattern, classic_format))
+            if error:
+                errors.append(error)
+                tqdm.tqdm.write(f"GOESGCP ERROR: {error}", file=sys.stderr)
             loading_bar.update(1)
         loading_bar.close()
 
     # Clean up the temporary directory
-    shutil.rmtree('tmp/')
+    shutil.rmtree('tmp/', ignore_errors=True)
+
+    # Report the result
+    success = len(files_list) - len(errors)
+    if errors:
+        print(f"GOESGCP: {success}/{len(files_list)} files processed successfully, "
+              f"{len(errors)} failed. See fail.log for details.", file=sys.stderr)
+        sys.exit(1)
+    print(f"GOESGCP: {success}/{len(files_list)} files processed successfully.")
 
 if __name__ == '__main__':
     main()
